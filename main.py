@@ -10,10 +10,10 @@ SRC_DIR = os.path.join(BASE_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
+import customtkinter as ctk  # noqa: E402
 import src.overlay_server  # noqa: E402
 import src.voice_listener  # noqa: E402
 import src.translator      # noqa: E402
-import customtkinter as ctk  # noqa: E402
 from src.gui import TwitchBotApp  # noqa: E402
 
 # .envの読み込み
