@@ -1,0 +1,15 @@
+.env
+config.json
+logs/
+venv/
+.venv/
+build/
+dist/
+__pycache__/
+.pytest_cache/
+.vscode/
+*.pyc
+*.log
+ngrok.exe
+*.spec
+!Kototsuna.spec

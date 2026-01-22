@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Twitch Auth Callback</title>
+    <script>
+        window.onload = function() {
+            const hash = window.location.hash.substring(1);
+            const params = new URLSearchParams(hash);
+            const accessToken = params.get("access_token");
+
+            if (accessToken) {
+                fetch("http://localhost:8787/token", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ token: accessToken }),
+                })
+                .then(response => {
+                    if (response.ok) {
+                        document.getElementById("status").innerText = "✅ 認証に成功しました。このウィンドウを閉じてください。";
+                        // 自動でウィンドウを閉じる場合は次の行を有効化
+                        // window.close();
+                    } else {
+                        document.getElementById("status").innerText = "❌ トークンの送信に失敗しました。";
+                    }
+                })
+                .catch(error => {
+                    console.error("Error:", error);
+                    document.getElementById("status").innerText = "❌ エラーが発生しました。";
+                });
+            } else {
+                document.getElementById("status").innerText = "❌ 認証に失敗しました。アクセストークンが見つかりません。";
+            }
+        };
+    </script>
+</head>
+<body>
+    <h2 id="status">認証処理中...</h2>
+</body>
+</html>
