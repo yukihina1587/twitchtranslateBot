@@ -347,10 +347,8 @@ class VoiceTranslator:
             # 翻訳
             api_key = self.api_key_getter()
             if api_key:
-                translate_mode = mode
-                if mode == '自動':
-                    translate_mode = '日→英'
-                translated = translate_text_sync(text, translate_mode, api_key)
+                # 自動モードの場合はそのままtranslatorに渡して判定させる
+                translated = translate_text_sync(text, mode, api_key)
             else:
                 translated = "(No API Key)"
 
@@ -409,11 +407,8 @@ class VoiceTranslator:
             # Translate
             api_key = self.api_key_getter()
             if api_key:
-                # 音声翻訳の場合、自動モードは「日→英」として扱う（配信者の声を英語にするため）
-                translate_mode = mode
-                if mode == '自動':
-                    translate_mode = '日→英'
-                translated = translate_text_sync(text, translate_mode, api_key)
+                # 自動モードの場合はそのままtranslatorに渡して判定させる
+                translated = translate_text_sync(text, mode, api_key)
             else:
                 translated = "(No API Key)"
 

@@ -4,6 +4,7 @@ import requests
 import time
 import asyncio
 import threading
+import re
 from collections import OrderedDict
 from src.logger import logger
 
@@ -25,6 +26,18 @@ def get_deepl_endpoint(api_key):
     if api_key and api_key.strip().endswith(":fx"):
         return DEEPL_FREE_ENDPOINT
     return DEEPL_PRO_ENDPOINT
+
+
+def _is_japanese(text):
+    """
+    テキストに日本語が含まれているか判定する簡易ロジック
+    ひらがな([3040-309F]) または カタカナ([30A0-30FF]) が含まれていれば日本語とみなす
+    """
+    if not text:
+        return False
+    # ひらがな・カタカナの範囲
+    jp_pattern = re.compile(r'[\u3040-\u309F\u30A0-\u30FF]')
+    return bool(jp_pattern.search(text))
 
 
 class _TranslationCache:
@@ -175,6 +188,15 @@ def _build_payload(text, mode):
     elif mode == '日→英':
         source_lang = 'JA'
         target_lang = 'EN'
+    elif mode == '自動':
+        # 自動モード: 日本語が含まれていれば英語に、それ以外は日本語に翻訳
+        if _is_japanese(text):
+            source_lang = 'JA'
+            target_lang = 'EN'
+        else:
+            # ソース言語はDeepLに任せる（英語以外も日本語にしたいのでsource指定なし）
+            source_lang = None
+            target_lang = 'JA'
     else:
         source_lang = None
         target_lang = 'JA'
