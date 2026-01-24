@@ -14,7 +14,7 @@ async def test_translate_text_uses_cache(monkeypatch):
 
     calls = {"count": 0}
 
-    async def fake_http(payload):
+    async def fake_http(payload, endpoint):
         calls["count"] += 1
         return 200, "", {"translations": [{"text": "OUT"}]}
 
@@ -36,7 +36,7 @@ def test_translate_text_sync_uses_cache(monkeypatch):
 
     calls = {"count": 0}
 
-    def fake_http(payload):
+    def fake_http(payload, endpoint):
         calls["count"] += 1
         return 200, "", {"translations": [{"text": "SYNC"}]}
 
