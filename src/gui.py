@@ -10,6 +10,7 @@ import json
 import platform
 import os
 from datetime import datetime
+from typing import Dict
 
 # pygameは効果音再生で使用
 try:
@@ -33,6 +34,7 @@ from src.participant_tracker import get_tracker
 from src.voicevox_manager import get_voicevox_manager
 from src.comment_data import CommentData
 from src import translator
+from src.resource_monitor import get_monitor
 
 # 外観設定 / テーマ
 ctk.set_appearance_mode("Dark")
@@ -129,6 +131,11 @@ class TwitchBotApp:
         # オーバーレイサーバー起動
         run_server_thread()
 
+        # リソース監視の初期化
+        self.resource_monitor = get_monitor()
+        # 警告コールバックを設定
+        self.resource_monitor.warning_callback = self._on_resource_warning
+
         self.build_widgets()
 
         # ウィンドウアイコンを設定（ウィジェット構築後）
@@ -147,6 +154,7 @@ class TwitchBotApp:
         self.tab_settings = self.tabview.add("設定")
         self.tab_dictionary = self.tabview.add("読み上げ辞書")
         self.tab_participants = self.tabview.add("参加者管理")
+        self.tab_resources = self.tabview.add("リソース監視")
 
         # === メイン操作タブ ===
         self.build_main_tab()
@@ -159,6 +167,9 @@ class TwitchBotApp:
 
         # === 参加者タブ ===
         self.build_participants_tab()
+
+        # === リソース監視タブ ===
+        self.build_resource_monitor_tab()
 
     def build_main_tab(self):
         surface = ctk.CTkFrame(self.tab_main, fg_color="transparent")
@@ -1476,7 +1487,7 @@ setInterval(()=>{{ location.reload(); }}, 1200);
 
     def stop_bot(self):
         if self.bot_instance:
-            self.bot_instance.disconnect()
+            self.bot_instance.stop()
             self.log_message("⛔ BOTを停止しました")
             self._set_status("BOTを停止しました。認証済みです。", "warn")
 
@@ -1492,6 +1503,16 @@ setInterval(()=>{{ location.reload(); }}, 1200);
         logger.info("Starting cleanup_resources...")
 
         try:
+            # リソース監視を停止
+            if hasattr(self, 'resource_monitor'):
+                logger.info("Stopping resource monitor...")
+                self.resource_monitor.stop_monitoring()
+                self.stop_resource_auto_update()
+                logger.info("Resource monitor stopped.")
+        except Exception as e:
+            logger.error(f"Failed to stop resource monitor: {e}", exc_info=True)
+
+        try:
             # 音声認識を停止
             logger.info("Stopping voice translator...")
             self.voice_translator.stop()
@@ -1503,7 +1524,7 @@ setInterval(()=>{{ location.reload(); }}, 1200);
             # Botを停止
             if self.bot_instance:
                 logger.info("Disconnecting bot instance...")
-                self.bot_instance.disconnect()
+                self.bot_instance.stop()
                 logger.info("Bot disconnected.")
         except Exception as e:
             logger.error(f"Failed to disconnect bot: {e}", exc_info=True)
@@ -1995,6 +2016,278 @@ setInterval(()=>{{ location.reload(); }}, 1200);
         self.refresh_participant_list()
         # タブ表示用のリストも自動更新
         self.start_participant_tab_auto_refresh()
+
+    def build_resource_monitor_tab(self):
+        """リソース監視タブの構築"""
+        # メインフレーム
+        main_frame = ctk.CTkFrame(self.tab_resources, fg_color="transparent")
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # ヘッダー
+        header = ctk.CTkFrame(main_frame, fg_color=CARD_BG, corner_radius=10, border_width=1, border_color=BORDER)
+        header.pack(fill="x", pady=(0, 10))
+        
+        header_content = ctk.CTkFrame(header, fg_color="transparent")
+        header_content.pack(fill="x", padx=15, pady=12)
+        
+        ctk.CTkLabel(
+            header_content,
+            text="リソース監視",
+            font=FONT_TITLE
+        ).pack(side="left")
+        
+        # 監視開始/停止ボタン
+        self.monitor_switch_var = ctk.BooleanVar(value=False)
+        monitor_switch = ctk.CTkSwitch(
+            header_content,
+            text="監視を開始",
+            variable=self.monitor_switch_var,
+            command=self.toggle_resource_monitoring,
+            font=FONT_LABEL
+        )
+        monitor_switch.pack(side="right", padx=10)
+        
+        # デバッグモードスイッチ
+        self.debug_mode_var = ctk.BooleanVar(value=False)
+        debug_switch = ctk.CTkSwitch(
+            header_content,
+            text="デバッグモード",
+            variable=self.debug_mode_var,
+            font=FONT_BODY,
+            text_color=TEXT_SUBTLE
+        )
+        debug_switch.pack(side="right", padx=10)
+
+        # リソース統計表示エリア（2列レイアウト）
+        stats_container = ctk.CTkFrame(main_frame, fg_color="transparent")
+        stats_container.pack(fill="both", expand=True)
+        stats_container.grid_columnconfigure(0, weight=1)
+        stats_container.grid_columnconfigure(1, weight=1)
+
+        # 左側: プロセス情報
+        process_card = ctk.CTkFrame(stats_container, fg_color=CARD_BG, corner_radius=10, border_width=1, border_color=BORDER)
+        process_card.grid(row=0, column=0, sticky="nsew", padx=(0, 5), pady=5)
+        process_card.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(process_card, text="プロセス情報", font=FONT_LABEL).grid(row=0, column=0, columnspan=2, sticky="w", padx=15, pady=(12, 8))
+        
+        # メモリ使用量
+        ctk.CTkLabel(process_card, text="メモリ使用量:", font=FONT_BODY, text_color=TEXT_SUBTLE).grid(row=1, column=0, sticky="w", padx=15, pady=5)
+        self.memory_label = ctk.CTkLabel(process_card, text="-- MB", font=FONT_BODY)
+        self.memory_label.grid(row=1, column=1, sticky="w", padx=15, pady=5)
+        
+        # CPU使用率
+        ctk.CTkLabel(process_card, text="CPU使用率:", font=FONT_BODY, text_color=TEXT_SUBTLE).grid(row=2, column=0, sticky="w", padx=15, pady=5)
+        self.cpu_label = ctk.CTkLabel(process_card, text="-- %", font=FONT_BODY)
+        self.cpu_label.grid(row=2, column=1, sticky="w", padx=15, pady=5)
+        
+        # スレッド数
+        ctk.CTkLabel(process_card, text="アクティブスレッド数:", font=FONT_BODY, text_color=TEXT_SUBTLE).grid(row=3, column=0, sticky="w", padx=15, pady=5)
+        self.thread_label = ctk.CTkLabel(process_card, text="--", font=FONT_BODY)
+        self.thread_label.grid(row=3, column=1, sticky="w", padx=15, pady=5)
+        
+        # メモリ使用率
+        ctk.CTkLabel(process_card, text="メモリ使用率:", font=FONT_BODY, text_color=TEXT_SUBTLE).grid(row=4, column=0, sticky="w", padx=15, pady=5)
+        self.memory_percent_label = ctk.CTkLabel(process_card, text="-- %", font=FONT_BODY)
+        self.memory_percent_label.grid(row=4, column=1, sticky="w", padx=15, pady=5)
+
+        # 右側: システム情報
+        system_card = ctk.CTkFrame(stats_container, fg_color=CARD_BG, corner_radius=10, border_width=1, border_color=BORDER)
+        system_card.grid(row=0, column=1, sticky="nsew", padx=(5, 0), pady=5)
+        system_card.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(system_card, text="システム情報", font=FONT_LABEL).grid(row=0, column=0, columnspan=2, sticky="w", padx=15, pady=(12, 8))
+        
+        # システムCPU使用率
+        ctk.CTkLabel(system_card, text="システムCPU使用率:", font=FONT_BODY, text_color=TEXT_SUBTLE).grid(row=1, column=0, sticky="w", padx=15, pady=5)
+        self.system_cpu_label = ctk.CTkLabel(system_card, text="-- %", font=FONT_BODY)
+        self.system_cpu_label.grid(row=1, column=1, sticky="w", padx=15, pady=5)
+        
+        # システムメモリ総量
+        ctk.CTkLabel(system_card, text="システムメモリ総量:", font=FONT_BODY, text_color=TEXT_SUBTLE).grid(row=2, column=0, sticky="w", padx=15, pady=5)
+        self.system_memory_total_label = ctk.CTkLabel(system_card, text="-- MB", font=FONT_BODY)
+        self.system_memory_total_label.grid(row=2, column=1, sticky="w", padx=15, pady=5)
+        
+        # システムメモリ使用可能
+        ctk.CTkLabel(system_card, text="システムメモリ使用可能:", font=FONT_BODY, text_color=TEXT_SUBTLE).grid(row=3, column=0, sticky="w", padx=15, pady=5)
+        self.system_memory_available_label = ctk.CTkLabel(system_card, text="-- MB", font=FONT_BODY)
+        self.system_memory_available_label.grid(row=3, column=1, sticky="w", padx=15, pady=5)
+        
+        # システムメモリ使用率
+        ctk.CTkLabel(system_card, text="システムメモリ使用率:", font=FONT_BODY, text_color=TEXT_SUBTLE).grid(row=4, column=0, sticky="w", padx=15, pady=5)
+        self.system_memory_percent_label = ctk.CTkLabel(system_card, text="-- %", font=FONT_BODY)
+        self.system_memory_percent_label.grid(row=4, column=1, sticky="w", padx=15, pady=5)
+
+        # 警告表示エリア
+        warning_frame = ctk.CTkFrame(main_frame, fg_color=CARD_BG, corner_radius=10, border_width=1, border_color=ACCENT_WARN)
+        warning_frame.pack(fill="x", pady=5)
+        warning_frame.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkLabel(warning_frame, text="警告", font=FONT_LABEL, text_color=ACCENT_WARN).grid(row=0, column=0, sticky="w", padx=15, pady=(12, 5))
+        self.warning_label = ctk.CTkLabel(
+            warning_frame,
+            text="警告はありません",
+            font=FONT_BODY,
+            text_color=TEXT_SUBTLE,
+            wraplength=800,
+            justify="left"
+        )
+        self.warning_label.grid(row=1, column=0, sticky="w", padx=15, pady=(0, 12))
+
+        # デバッグ情報表示エリア（デバッグモード時のみ表示）
+        self.debug_frame = ctk.CTkFrame(main_frame, fg_color=PANEL_BG, corner_radius=10, border_width=1, border_color=BORDER)
+        self.debug_text = ctk.CTkTextbox(self.debug_frame, height=200, font=("Consolas", 10))
+        self.debug_text.pack(fill="both", expand=True, padx=10, pady=10)
+        self.debug_frame.pack_forget()  # 初期状態では非表示
+
+        # 更新ボタン
+        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.pack(fill="x", pady=(10, 0))
+        
+        ctk.CTkButton(
+            button_frame,
+            text="手動更新",
+            command=self.update_resource_display,
+            width=120
+        ).pack(side="left", padx=5)
+        
+        ctk.CTkButton(
+            button_frame,
+            text="デバッグ情報をコピー",
+            command=self.copy_debug_info,
+            width=180,
+            fg_color=ACCENT_SECONDARY,
+            hover_color="#1EA4D8"
+        ).pack(side="left", padx=5)
+
+        # 自動更新タイマー
+        self.resource_update_timer = None
+        self.update_resource_display()
+
+    def toggle_resource_monitoring(self):
+        """リソース監視の開始/停止"""
+        if self.monitor_switch_var.get():
+            self.resource_monitor.start_monitoring(interval=5.0)
+            self.log_message("リソース監視を開始しました", log_type="system")
+            # 自動更新を開始
+            self.start_resource_auto_update()
+        else:
+            self.resource_monitor.stop_monitoring()
+            self.log_message("リソース監視を停止しました", log_type="system")
+            # 自動更新を停止
+            self.stop_resource_auto_update()
+
+    def start_resource_auto_update(self):
+        """リソース表示の自動更新を開始"""
+        self.stop_resource_auto_update()
+        self._update_resource_loop()
+
+    def stop_resource_auto_update(self):
+        """リソース表示の自動更新を停止"""
+        if self.resource_update_timer:
+            self.master.after_cancel(self.resource_update_timer)
+            self.resource_update_timer = None
+
+    def _update_resource_loop(self):
+        """リソース表示の更新ループ"""
+        self.update_resource_display()
+        # 2秒ごとに更新
+        self.resource_update_timer = self.master.after(2000, self._update_resource_loop)
+
+    def update_resource_display(self):
+        """リソース表示を更新"""
+        stats = self.resource_monitor.get_resource_stats()
+        
+        if not stats.get("available", False):
+            error_msg = stats.get("error", "リソース情報を取得できません")
+            self.memory_label.configure(text=f"エラー: {error_msg}", text_color=ACCENT_WARN)
+            return
+        
+        process_stats = stats.get("process", {})
+        system_stats = stats.get("system", {})
+        warnings = stats.get("warnings", {})
+        
+        # プロセス情報を更新
+        memory_mb = process_stats.get("memory_mb", 0)
+        memory_warning = warnings.get("memory_warning", False)
+        self.memory_label.configure(
+            text=f"{memory_mb:.2f} MB",
+            text_color=ACCENT_WARN if memory_warning else "#FFFFFF"
+        )
+        
+        cpu_percent = process_stats.get("cpu_percent", 0)
+        cpu_warning = warnings.get("cpu_warning", False)
+        self.cpu_label.configure(
+            text=f"{cpu_percent:.2f} %",
+            text_color=ACCENT_WARN if cpu_warning else "#FFFFFF"
+        )
+        
+        thread_count = process_stats.get("thread_count", 0)
+        self.thread_label.configure(text=str(thread_count))
+        
+        memory_percent = process_stats.get("memory_percent", 0)
+        self.memory_percent_label.configure(
+            text=f"{memory_percent:.2f} %",
+            text_color=ACCENT_WARN if memory_warning else "#FFFFFF"
+        )
+        
+        # システム情報を更新
+        system_cpu = system_stats.get("cpu_percent", 0)
+        self.system_cpu_label.configure(text=f"{system_cpu:.2f} %")
+        
+        system_memory_total = system_stats.get("memory_total_mb", 0)
+        self.system_memory_total_label.configure(text=f"{system_memory_total:.2f} MB")
+        
+        system_memory_available = system_stats.get("memory_available_mb", 0)
+        self.system_memory_available_label.configure(text=f"{system_memory_available:.2f} MB")
+        
+        system_memory_percent = system_stats.get("memory_used_percent", 0)
+        self.system_memory_percent_label.configure(text=f"{system_memory_percent:.2f} %")
+        
+        # 警告表示を更新
+        warning_messages = []
+        if memory_warning:
+            warning_messages.append(f"⚠️ メモリ使用量が警告閾値を超えています ({memory_mb:.2f}MB)")
+        if cpu_warning:
+            warning_messages.append(f"⚠️ CPU使用率が警告閾値を超えています ({cpu_percent:.2f}%)")
+        
+        if warning_messages:
+            self.warning_label.configure(
+                text="\n".join(warning_messages),
+                text_color=ACCENT_WARN
+            )
+        else:
+            self.warning_label.configure(
+                text="警告はありません",
+                text_color=TEXT_SUBTLE
+            )
+        
+        # デバッグモード時は詳細情報を表示
+        if self.debug_mode_var.get():
+            debug_info = self.resource_monitor.get_detailed_debug_info()
+            import json
+            debug_text = json.dumps(debug_info, indent=2, ensure_ascii=False)
+            self.debug_text.delete("0.0", "end")
+            self.debug_text.insert("0.0", debug_text)
+            self.debug_frame.pack(fill="both", expand=True, pady=(10, 0))
+        else:
+            self.debug_frame.pack_forget()
+
+    def _on_resource_warning(self, warning_type: str, warning_data: Dict):
+        """リソース警告のコールバック"""
+        message = warning_data.get("message", "")
+        self.log_message(f"[リソース警告] {message}", log_type="system")
+        # GUI上でも警告を表示
+        self.master.after(0, lambda: self.update_resource_display())
+
+    def copy_debug_info(self):
+        """デバッグ情報をクリップボードにコピー"""
+        debug_info = self.resource_monitor.get_detailed_debug_info()
+        import json
+        debug_text = json.dumps(debug_info, indent=2, ensure_ascii=False)
+        self.master.clipboard_clear()
+        self.master.clipboard_append(debug_text)
+        self.log_message("デバッグ情報をクリップボードにコピーしました", log_type="system")
 
     def toggle_tracking(self):
         """参加者追跡の有効/無効を切り替え"""

@@ -265,5 +265,19 @@ class TranslateBot(commands.Bot):
             logger.error(f"参加者リスト送信エラー: {e}", exc_info=True)
             return False
 
-    def disconnect(self):
-        self._ws = None
+    def stop(self):
+        """
+        BOTを安全に停止する
+        asyncio.run_coroutine_threadsafe を使用して、別スレッドで実行中のループに対して close() を呼び出す
+        """
+        if self._running_loop and self._running_loop.is_running():
+            try:
+                future = asyncio.run_coroutine_threadsafe(self.close(), self._running_loop)
+                # 完了を待機 (タイムアウト付き)
+                future.result(timeout=5)
+                logger.info("Bot stopped gracefully via asyncio.close().")
+            except Exception as e:
+                logger.error(f"Failed to stop bot gracefully: {e}")
+        else:
+            logger.warning("Bot loop not running or not captured, cannot stop gracefully via loop.")
+
