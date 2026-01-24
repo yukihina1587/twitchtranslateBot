@@ -2,7 +2,7 @@ import asyncio
 from twitchio.ext import commands
 from src.translator import translate_text, should_filter, apply_translation_dictionary, get_stats
 from src.logger import logger
-from src.tts import get_tts_instance
+from src.tts import get_tts_instance, is_japanese
 from src.participant_tracker import get_tracker
 from src.comment_data import create_twitch_comment
 
@@ -28,7 +28,10 @@ class TranslateBot(commands.Bot):
         logger.info(f"Bot logged in as {self.nick}")
 
     async def event_message(self, message):
-        if message.echo:
+        # 自分の発言は無視（echoフラグまたは名前一致またはゼロ幅スペース検知）
+        if message.echo or (self.nick and message.author.name.lower() == self.nick.lower()):
+            return
+        if '\u200B' in message.content:
             return
 
         original_content = message.content
@@ -122,7 +125,7 @@ class TranslateBot(commands.Bot):
 
         # チャットに翻訳結果を送信（翻訳がある場合のみ）
         if translated and translated != message.content:
-            await message.channel.send(translated)
+            await message.channel.send(translated + '\u200B')
 
         # CommentDataオブジェクトを作成（全てのコメントを表示）
         comment = create_twitch_comment(
@@ -138,14 +141,14 @@ class TranslateBot(commands.Bot):
 
         # TTS: チャット読み上げ
         if self.tts_enabled_getter():
-            # 日本語のコメントはそのまま、外国語のコメントは翻訳後を読み上げ
-            # 翻訳がある場合は翻訳を、ない場合は元のメッセージを読み上げ
+            # デフォルトは原文
+            speak_text = message.content
+
+            # 翻訳があり、かつ翻訳結果が日本語を含むなら、翻訳結果を読み上げる
+            # (英語コメント -> 日本語翻訳 のケース)
             if translated and translated != message.content:
-                # 翻訳結果がある場合（外国語→日本語）
-                speak_text = translated
-            else:
-                # 翻訳がない場合（日本語のコメント）
-                speak_text = message.content
+                if is_japanese(translated):
+                    speak_text = translated
 
             # 名前を読み上げる設定があれば、名前も追加
             if self.tts_include_name_getter():

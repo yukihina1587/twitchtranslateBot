@@ -222,17 +222,14 @@ class TwitchBotApp:
         ctk.CTkLabel(card_voice, text="音声 & 読み上げ", font=FONT_LABEL).grid(row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 8))
 
         self.voice_var = ctk.BooleanVar(value=False)
-        self.voice_tts_var = ctk.BooleanVar(value=False)
-        self.event_tts_var = ctk.BooleanVar(value=False)
+        # self.voice_tts_var: 廃止（読み上げない）
+        # self.event_tts_var: 廃止（常に読み上げる）
+        # self.voice_send_to_chat_var: 廃止（voice_varと統合）
         self.tts_include_name_var = ctk.BooleanVar(value=False)
-        self.voice_send_to_chat_var = ctk.BooleanVar(value=False)
 
         toggle_items = [
-            ("🎤 音声翻訳 (マイク)", self.voice_var, self.toggle_voice),
-            ("📢 音声翻訳を読み上げ", self.voice_tts_var, None),
-            ("⭐ 特別イベントを読み上げ", self.event_tts_var, None),
+            ("🎤 音声翻訳してチャット送信", self.voice_var, self.toggle_voice),
             ("👤 名前も読み上げる", self.tts_include_name_var, None),
-            ("💬 音声翻訳をチャット送信", self.voice_send_to_chat_var, None),
         ]
 
         for idx, (label, var, cmd) in enumerate(toggle_items):
@@ -368,6 +365,16 @@ class TwitchBotApp:
             command=self.toggle_chat_html_output,
             font=FONT_BODY
         ).pack(side="left", padx=8)
+
+        # ブラウザで開くボタン
+        ctk.CTkButton(
+            log_btn_frame,
+            text="🌐 ブラウザで確認",
+            command=self.open_chat_html_in_browser,
+            width=120,
+            fg_color="#0D9488",
+            hover_color="#0F766E"
+        ).pack(side="left", padx=5)
 
         # === 右側: 上下2分割のPanedWindow（垂直方向） ===
         right_paned = tk.PanedWindow(
@@ -553,7 +560,7 @@ class TwitchBotApp:
         ctk.CTkLabel(frm_set, text="フォント (例: Consolas 11)", font=("Arial", 12)).grid(row=row_base+3, column=0, sticky="w")
         ctk.CTkEntry(frm_set, textvariable=self.comment_font, width=220).grid(row=row_base+3, column=1, sticky="w", pady=2)
         ctk.CTkLabel(frm_set, text="吹き出しデザイン", font=("Arial", 12)).grid(row=row_base+4, column=0, sticky="w")
-        ctk.CTkOptionMenu(frm_set, values=["classic", "bubble", "minimal"], variable=self.comment_bubble_style, width=200).grid(row=row_base+4, column=1, sticky="w")
+        ctk.CTkOptionMenu(frm_set, values=["classic", "modern", "box", "bubble", "neon", "cute", "minimal"], variable=self.comment_bubble_style, width=200).grid(row=row_base+4, column=1, sticky="w")
 
         # === HTML出力設定 ===
         ctk.CTkLabel(frm_set, text="チャットHTML出力先", font=("Arial", 14, "bold")).grid(row=row_base+5, column=0, sticky="w", pady=(12, 4))
@@ -858,33 +865,148 @@ class TwitchBotApp:
             logger.error(f"Failed to export chat HTML: {e}", exc_info=True)
             self.log_message("⚠️ チャットHTMLの書き出しに失敗しました", log_type="error")
 
-    def _build_chat_html(self) -> str:
+    def _get_css_style(self, style_name):
         bg = self.comment_bg.get()
         fg = self.comment_fg.get()
         font = self.comment_font.get() or "Consolas, monospace"
-        bubble = self.comment_bubble_style.get()
-        bubble_style = ""
-        if bubble == "bubble":
-            bubble_style = "background: rgba(34,197,94,0.12); border:1px solid #22c55e; border-radius:16px;"
-        elif bubble == "minimal":
-            bubble_style = "border:1px solid #1f2c43; border-radius:8px;"
-        else:
-            bubble_style = "background: rgba(255,255,255,0.05); border:1px solid #3f4e5f; border-radius:12px;"
+        
+        # 基本スタイル
+        base = f"""
+            body {{ margin:0; padding:12px; background-color:{bg}; color:{fg}; font-family:{font}; font-size:14px; overflow-x: hidden; word-wrap: break-word; }}
+            .msg {{ margin-bottom:12px; animation: fadein 0.3s; display: flex; flex-direction: column; }}
+            .meta {{ display: flex; align-items: baseline; margin-bottom: 4px; font-size: 0.85em; opacity: 0.8; }}
+            .time {{ margin-right: 8px; font-size: 0.9em; }}
+            .name {{ font-weight: bold; }}
+            .content {{ display: flex; flex-direction: column; }}
+            .body {{ line-height: 1.4; }}
+            .sub {{ font-size: 0.9em; opacity: 0.8; margin-top: 2px; }}
+            @keyframes fadein {{ from {{ opacity:0; transform:translateY(5px); }} to {{ opacity:1; transform:translateY(0); }} }}
+        """
+
+        if style_name == "modern":
+            return base + """
+                /* Modern (Overlay Friendly) */
+                .msg { 
+                    background: rgba(20, 20, 30, 0.9); 
+                    border-radius: 8px; 
+                    border-left: 4px solid #22c55e;
+                    padding: 10px 14px; 
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+                    animation: slideIn 0.3s;
+                }
+                .meta { border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px; margin-bottom: 6px; }
+                .name { color: #4ade80; font-weight: bold; }
+                .time { color: #94a3b8; font-size: 0.8em; }
+                .body { color: #f1f5f9; font-size: 1.05em; }
+                .sub { 
+                    margin-top: 6px; padding-top: 4px; 
+                    border-top: 1px dashed rgba(255,255,255,0.15); 
+                    color: #94a3b8; font-size: 0.9em; 
+                }
+            """
+        elif style_name == "box":
+            return base + """
+                .msg { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); padding: 10px; border-radius: 4px; animation: fadein 0.3s; }
+                .meta { margin-bottom: 4px; font-size: 0.9em; color: #aaa; }
+                .name { color: #88c0d0; font-weight: bold; margin-right: 8px; }
+                .sub { color: #81a1c1; font-size: 0.9em; border-top: 1px solid rgba(255,255,255,0.1); margin-top: 6px; padding-top: 4px; }
+            """
+        elif style_name == "bubble":
+            return base + """
+                .msg { display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 16px; animation: slideIn 0.3s; }
+                .meta { font-size: 0.8em; color: #888; margin-left: 8px; margin-bottom: 2px; }
+                .name { font-weight: bold; color: #444; }
+                .content { display: flex; flex-direction: column; align-items: flex-start; max-width: 90%; }
+                .body { 
+                    background: #ffffff; color: #333; padding: 10px 14px; 
+                    border-radius: 18px; border-top-left-radius: 4px; 
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+                    position: relative;
+                }
+                .sub { 
+                    background: #f0f4f8; color: #555; padding: 6px 12px; 
+                    border-radius: 12px; margin-top: 4px; margin-left: 4px;
+                    font-size: 0.85em; border: 1px solid #e1e8ed;
+                }
+            """
+        elif style_name == "cute":
+            return base + """
+                body { background-color: transparent; color: #5d4037; }
+                .msg { 
+                    background: #fff; border: 2px solid #ffb7b2; 
+                    border-radius: 15px; padding: 12px; 
+                    box-shadow: 3px 3px 0px rgba(255, 183, 178, 0.5); 
+                    margin-bottom: 14px; animation: fadein 0.4s;
+                }
+                .meta { border-bottom: 1px dashed #ffb7b2; padding-bottom: 4px; margin-bottom: 6px; }
+                .name { color: #ec407a; font-weight: bold; }
+                .time { color: #999; font-size: 0.8em; }
+                .body { font-size: 1.05em; line-height: 1.5; color: #4e342e; }
+                .sub { 
+                    background: #fff9c4; color: #d81b60; 
+                    padding: 5px 10px; border-radius: 10px; 
+                    margin-top: 6px; font-size: 0.9em; 
+                }
+            """
+        elif style_name == "neon":
+            return base + """
+                body { background-color: #000; color: #fff; text-shadow: 0 0 2px #fff; }
+                .msg { 
+                    background: rgba(0, 20, 0, 0.3); border: 1px solid #0f0; 
+                    padding: 10px; box-shadow: 0 0 8px rgba(0, 255, 0, 0.3); 
+                    border-radius: 6px; animation: fadein 0.2s;
+                }
+                .meta { color: #0f0; font-size: 0.9em; margin-bottom: 4px; border-bottom: 1px solid rgba(0,255,0,0.3); padding-bottom: 2px; }
+                .name { font-weight: bold; }
+                .sub { color: #0ff; text-shadow: 0 0 3px #0ff; margin-top: 6px; font-size: 0.9em; }
+            """
+        else: # classic / minimal
+            return base + """
+                .msg { border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 8px; }
+                .sub { color: #88c0d0; margin-left: 10px; }
+            """
+
+    def _build_chat_html(self) -> str:
+        style_name = self.comment_bubble_style.get()
+        css = self._get_css_style(style_name)
+        
+        # テンプレート読み込み (custom.css)
+        try:
+            # HTML出力先と同じフォルダの custom.css を探す
+            output_dir = os.path.dirname(self.chat_html_path.get() or self._default_chat_html_path(""))
+            custom_css_path = os.path.join(output_dir, "custom.css")
+            if os.path.exists(custom_css_path):
+                with open(custom_css_path, "r", encoding="utf-8") as f:
+                    css += "\n/* Custom CSS */\n" + f.read()
+        except Exception as e:
+            logger.error(f"Failed to load custom.css: {e}")
 
         items = []
         for c in self.chat_history:
-            line = f"<div class='msg'><div class='meta'>{c['time']} {c['name']}</div><div class='body'>{c['message']}</div>"
-            if c.get("translated"):
-                line += f"<div class='sub'>➡ {c['translated']}</div>"
-            line += "</div>"
+            # HTMLエスケープ（簡易）
+            name = str(c['name']).replace("<", "&lt;").replace(">", "&gt;")
+            message = str(c['message']).replace("<", "&lt;").replace(">", "&gt;")
+            translated = str(c['translated']).replace("<", "&lt;").replace(">", "&gt;") if c.get("translated") else ""
+            
+            sub_html = f"<div class='sub'>{translated}</div>" if translated else ""
+            
+            line = f"""
+            <div class='msg'>
+                <div class='meta'>
+                    <span class='time'>{c['time']}</span>
+                    <span class='name'>{name}</span>
+                </div>
+                <div class='content'>
+                    <div class='body'>{message}</div>
+                    {sub_html}
+                </div>
+            </div>
+            """
             items.append(line)
         body = "\n".join(items)
         return f"""<!DOCTYPE html>
 <html><head><meta charset='utf-8'><style>
-body{{margin:0;padding:12px;background:{bg};color:{fg};font:{font};font-size:14px;}}
-.msg{{padding:8px 10px;margin-bottom:6px;{bubble_style}}}
-.meta{{color:#9fb3d1;font-size:12px;margin-bottom:4px;}}
-.sub{{color:#b3d4ff;font-size:13px;}}
+{css}
 </style>
 <script>
 function keepBottom(){{ window.scrollTo(0, document.body.scrollHeight); }}
@@ -893,6 +1015,45 @@ window.onload = keepBottom;
 setInterval(()=>{{ location.reload(); }}, 1200);
 </script>
 </head><body>{body}</body></html>"""
+
+    def open_chat_html_in_browser(self):
+        """チャットHTMLを既定のブラウザで開く"""
+        path = self.chat_html_path.get().strip() or self._default_chat_html_path("")
+        if not os.path.exists(path):
+            self._export_chat_html()
+        
+        try:
+            import webbrowser
+            # ファイルパスをURIに変換
+            url = f"file://{os.path.abspath(path)}"
+            webbrowser.open(url)
+            self.log_message(f"🌐 ブラウザで開きました: {path}")
+        except Exception as e:
+            logger.error(f"Failed to open browser: {e}")
+            self.log_message(f"❌ ブラウザの起動に失敗しました: {e}")
+
+    def _on_chat_html_window_close(self):
+        """チャットHTMLウィンドウが閉じられた時の処理"""
+        # トグルスイッチをOFFにする
+        self.chat_html_output.set(False)
+        
+        # ウィンドウを破棄
+        if hasattr(self, 'chat_html_window') and self.chat_html_window:
+            self.chat_html_window.destroy()
+            self.chat_html_window = None
+            
+        self.log_message("📄 チャットHTMLビューを閉じました")
+
+    def toggle_chat_html_output(self):
+        """HTML出力スイッチ用"""
+        self._auto_save_settings()
+        if self.chat_html_output.get():
+            self._export_chat_html()
+            self._open_chat_html_window()
+        else:
+            # スイッチオフ時はウィンドウを閉じる
+            if hasattr(self, 'chat_html_window') and self.chat_html_window and self.chat_html_window.winfo_exists():
+                self._on_chat_html_window_close()
 
     def _open_chat_html_window(self):
         """チャットHTMLを専用のTkinterウィンドウで開く（配信用縦長サイズ）"""
@@ -912,6 +1073,9 @@ setInterval(()=>{{ location.reload(); }}, 1200);
 
         # ウィンドウを常に最前面に表示（配信用）
         self.chat_html_window.attributes('-topmost', True)
+        
+        # 閉じるボタンの動作を設定（同期のため）
+        self.chat_html_window.protocol("WM_DELETE_WINDOW", self._on_chat_html_window_close)
 
         try:
             # tkinterwebを試す
@@ -979,7 +1143,11 @@ setInterval(()=>{{ location.reload(); }}, 1200);
 
                         text_widget.config(state="normal")
                         text_widget.delete("1.0", "end")
-                        text_widget.insert("1.0", content)
+                        
+                        # 注釈を追加
+                        note = "【⚠ 簡易プレビューモード】\nここにはデザイン（CSS）は適用されません。\n正しい表示を確認するには、設定タブの「🌐 ブラウザで確認」ボタンを押してください。\n\n" + ("-"*50) + "\n\n"
+                        
+                        text_widget.insert("1.0", note + content)
                         text_widget.config(state="disabled")
 
                         # 自動スクロール
@@ -1000,21 +1168,22 @@ setInterval(()=>{{ location.reload(); }}, 1200);
 
         except Exception as e:
             logger.error(f"Failed to open chat HTML window: {e}", exc_info=True)
+            
+            # エラー詳細をログファイルに出力（デバッグ用）
+            try:
+                import traceback
+                with open("html_preview_error.log", "w", encoding="utf-8") as f:
+                    f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+                    f.write(f"Error: {e}\n\n")
+                    traceback.print_exc(file=f)
+            except Exception:
+                pass
+
             if hasattr(self, 'chat_html_window') and self.chat_html_window:
                 self.chat_html_window.destroy()
             self.log_message(f"❌ チャットHTMLビューの表示に失敗しました: {e}")
 
-    def toggle_chat_html_output(self):
-        """HTML出力スイッチ用"""
-        self._auto_save_settings()
-        if self.chat_html_output.get():
-            self._export_chat_html()
-            self._open_chat_html_window()
-        else:
-            # スイッチオフ時はウィンドウを閉じる
-            if hasattr(self, 'chat_html_window') and self.chat_html_window and self.chat_html_window.winfo_exists():
-                self.chat_html_window.destroy()
-                self.log_message("📄 チャットHTMLビューを閉じました")
+
 
     def _add_comment_tile(self, comment: CommentData):
         """コメントをタイル形式で表示"""
@@ -1230,8 +1399,8 @@ setInterval(()=>{{ location.reload(); }}, 1200);
         if event_type in ("bits", "subscription"):
             self.play_event_sound(event_type)
 
-        # 特別イベントの読み上げ
-        if self.event_tts_var.get():
+        # 特別イベントの読み上げ（常にON）
+        if True:
             try:
                 # イベントタイプに応じた読み上げメッセージを作成
                 tts_messages = {
@@ -1435,14 +1604,33 @@ setInterval(()=>{{ location.reload(); }}, 1200);
     def run_auth_flow(self, client_id):
         url = build_auth_url(client_id)
 
-        self.log_message("🔗 認証ページを開きます。")
+        self.log_message("🔗 認証ページを開きます (Chrome シークレットモード推奨)")
         self.log_message(f"URL: {url}")
 
         try:
-            if shutil.which("wslview"):
-                subprocess.Popen(["wslview", url])
-            else:
-                webbrowser.open(url)
+            # Windows環境でChromeのシークレットモード起動を試みる
+            chrome_paths = [
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")
+            ]
+            
+            chrome_found = False
+            if platform.system() == "Windows":
+                for path in chrome_paths:
+                    if os.path.exists(path):
+                        subprocess.Popen([path, "--incognito", url])
+                        chrome_found = True
+                        self.log_message("✅ Chrome (シークレットモード) で開きました")
+                        break
+            
+            if not chrome_found:
+                # Chromeが見つからない場合は既存の挙動
+                if shutil.which("wslview"):
+                    subprocess.Popen(["wslview", url])
+                else:
+                    webbrowser.open(url)
+                    
         except Exception as e:
             logger.debug(f"Failed to open browser automatically: {e}")
             self.log_message("⚠ ブラウザの自動起動に失敗しました。URLをコピーして開いてください。")
@@ -1457,6 +1645,10 @@ setInterval(()=>{{ location.reload(); }}, 1200);
             self._set_status("トークンの取得に失敗しました。再試行してください。", "error")
 
     def start_bot(self):
+        # 既存のBOTがあれば停止（多重起動防止）
+        if self.bot_instance:
+            self.stop_bot()
+
         if not self.token:
             messagebox.showerror("エラー", "まずは「① トークン認証」を行ってください")
             return
@@ -2806,7 +2998,7 @@ setInterval(()=>{{ location.reload(); }}, 1200);
             if not loop:
                 return False
 
-            asyncio.run_coroutine_threadsafe(channel.send(text), loop)
+            asyncio.run_coroutine_threadsafe(channel.send(text + '\u200B'), loop)
             logger.debug(f"Sent chat message via helper: {text[:50]}...")
             return True
         except Exception as e:
@@ -2868,17 +3060,7 @@ setInterval(()=>{{ location.reload(); }}, 1200);
         # オーバーレイ更新
         update_translation(translated)
 
-        # 音声翻訳結果の読み上げ（英訳を優先）
-        spoken_text = translated if translated and translated != "(No API Key)" else text
-        if self.voice_tts_var.get() and spoken_text:
-            try:
-                self._ensure_tts_started()
-                self.tts.speak(spoken_text)
-                logger.debug(f"Voice recognition TTS: {spoken_text}")
-            except Exception as e:
-                logger.error(f"Failed to speak voice recognition: {e}", exc_info=True)
-
-        # 音声翻訳結果をチャット送信（スイッチがONの場合）
-        if self.voice_send_to_chat_var.get() and translated and translated != "(No API Key)":
+        # 音声翻訳結果をチャット送信（音声翻訳機能がONなら送信）
+        if self.voice_var.get() and translated and translated != "(No API Key)":
             if not self._send_text_to_chat(translated):
                 logger.warning("Voice translation could not be sent to chat (connection not ready?)")

@@ -7,6 +7,10 @@ hiddenimports = []
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+# tkinterwebを収集（これが無いとEXE化した際に読み込めない）
+tmp_ret = collect_all('tkinterweb')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
 # srcパッケージ内の全サブモジュールを収集
 hiddenimports += collect_submodules('src')
 

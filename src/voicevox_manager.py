@@ -85,14 +85,15 @@ class VoicevoxEngineManager:
             self.is_managed_by_us = True
             logger.info(f"VOICEVOX Engine process started (PID: {self.process.pid})")
 
-            # 起動を待機（最大10秒）
-            for i in range(20):  # 0.5秒 × 20 = 10秒
+            # 起動を待機（最大30秒）
+            # PCスペックによっては起動に時間がかかるため長めに設定
+            for i in range(60):  # 0.5秒 × 60 = 30秒
                 time.sleep(0.5)
                 if self.is_running():
                     logger.info(f"✅ VOICEVOX Engine is ready (took {(i+1)*0.5:.1f}s)")
                     return True
 
-            logger.warning("VOICEVOX Engine started but API is not responding")
+            logger.warning("VOICEVOX Engine started but API is not responding (timeout)")
             return False
 
         except Exception as e:
