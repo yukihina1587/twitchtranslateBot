@@ -168,7 +168,7 @@ def get_stats():
     return _stats.copy()
 
 
-def _build_payload(text, mode, api_key):
+def _build_payload(text, mode):
     if mode == '英→日':
         source_lang = 'EN'
         target_lang = 'JA'
@@ -180,7 +180,6 @@ def _build_payload(text, mode, api_key):
         target_lang = 'JA'
 
     data = {
-        "auth_key": api_key,
         "text": text,
         "target_lang": target_lang,
         "tag_handling": "xml",
@@ -191,15 +190,17 @@ def _build_payload(text, mode, api_key):
     return data
 
 
-async def _translate_http_async(payload, endpoint):
+async def _translate_http_async(payload, endpoint, api_key):
+    headers = {"Authorization": f"DeepL-Auth-Key {api_key}"}
     async with aiohttp.ClientSession() as session:
-        async with session.post(endpoint, data=payload) as resp:
+        async with session.post(endpoint, data=payload, headers=headers) as resp:
             body = await resp.text()
             return resp.status, body, await resp.json() if resp.status == 200 else None
 
 
-def _translate_http_sync(payload, endpoint):
-    resp = requests.post(endpoint, data=payload)
+def _translate_http_sync(payload, endpoint, api_key):
+    headers = {"Authorization": f"DeepL-Auth-Key {api_key}"}
+    resp = requests.post(endpoint, data=payload, headers=headers)
     return resp.status_code, resp.text, resp.json() if resp.status_code == 200 else None
 
 
@@ -228,7 +229,7 @@ async def translate_text(text, mode, api_key):
         logger.debug("translate_text cache hit")
         return cached
 
-    payload = _build_payload(text, mode, api_key)
+    payload = _build_payload(text, mode)
     endpoint = get_deepl_endpoint(api_key)
     await _rate_limiter.wait_async()
     _stats["requests"] += 1
@@ -237,7 +238,7 @@ async def translate_text(text, mode, api_key):
         if backoff:
             await asyncio.sleep(backoff)
         try:
-            status, body, result = await _translate_http_async(payload, endpoint)
+            status, body, result = await _translate_http_async(payload, endpoint, api_key)
             if status == 200:
                 translated = result["translations"][0]["text"]
                 _cache.set(cache_key, translated)
@@ -279,7 +280,7 @@ def translate_text_sync(text, mode, api_key):
         logger.debug("translate_text_sync cache hit")
         return cached
 
-    payload = _build_payload(text, mode, api_key)
+    payload = _build_payload(text, mode)
     endpoint = get_deepl_endpoint(api_key)
     _rate_limiter.wait_sync()
     _stats["requests"] += 1
@@ -288,7 +289,7 @@ def translate_text_sync(text, mode, api_key):
         if backoff:
             time.sleep(backoff)
         try:
-            status, body, result = _translate_http_sync(payload, endpoint)
+            status, body, result = _translate_http_sync(payload, endpoint, api_key)
             if status == 200:
                 translated = result["translations"][0]["text"]
                 _cache.set(cache_key, translated)
