@@ -7,6 +7,7 @@ CONFIG_FILE = "config.json"
 
 DEFAULT_CONFIG = {
     "twitch_client_id": "",
+    "twitch_access_token": "",  # 保存されたアクセストークン（自動ログイン用）
     "deepl_api_key": "",
     "channel_name": "",
     "translate_mode": "自動",
@@ -31,7 +32,8 @@ DEFAULT_CONFIG = {
     "comment_log_font": "Consolas 11",
     "comment_bubble_style": "classic",  # classic / bubble / minimal
     "chat_html_output": False,
-    "chat_html_path": ""
+    "chat_html_path": "",
+    "chat_html_newest_first": False,  # True: 上が新しい, False: 下が新しい
 }
 
 VALID_TRANSLATE_MODES = {"自動", "英→日", "日→英"}
@@ -60,6 +62,7 @@ def validate_config(config_data):
     # 文字列系はNone回避
     for key in [
         "twitch_client_id",
+        "twitch_access_token",
         "deepl_api_key",
         "channel_name",
         "voicevox_url",
@@ -89,7 +92,7 @@ def validate_config(config_data):
         changed = True
 
     # ブール系
-    for key in ["chat_html_output"]:
+    for key in ["chat_html_output", "chat_html_newest_first"]:
         if not isinstance(validated.get(key), bool):
             validated[key] = bool(validated.get(key))
             changed = True

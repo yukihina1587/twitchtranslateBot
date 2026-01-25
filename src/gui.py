@@ -22,7 +22,7 @@ except Exception as e:
     pygame = None
     PYGAME_AVAILABLE = False
 
-from src.auth import run_auth_server_and_get_token, build_auth_url
+from src.auth import run_auth_server_and_get_token, build_auth_url, validate_token
 from src.bot import TranslateBot
 from src.config import load_config, save_config
 from src.voice_listener import VoiceTranslator
@@ -107,6 +107,11 @@ class TwitchBotApp:
         # チャットHTML出力
         self.chat_html_output = tk.BooleanVar(value=self.config.get("chat_html_output", False))
         self.chat_html_path = tk.StringVar(value=self._default_chat_html_path(self.config.get("chat_html_path", "")))
+        self.chat_html_newest_first = tk.BooleanVar(value=self.config.get("chat_html_newest_first", False))
+        # HTML表示ウィンドウの管理
+        self.chat_html_window = None  # Tkinterウィンドウ（フォールバック用）
+        self.qt_html_window = None  # PyQt6ウィンドウ（Chromiumベース）
+        self.qt_app = None  # PyQt6アプリケーションインスタンス
         # 設定変更は即時保存
         self._setup_auto_save()
         # 参加者タブ自動更新用
@@ -140,6 +145,13 @@ class TwitchBotApp:
 
         # ウィンドウアイコンを設定（ウィジェット構築後）
         self._setup_window_icon()
+
+        # 起動時にHTML出力がONの場合、ウィンドウを開く
+        if self.chat_html_output.get():
+            self.master.after(500, self._open_chat_html_window)
+
+        # 起動時に保存されたトークンをチェックして自動ログイン
+        self.master.after(1000, self._check_saved_token)
 
     def build_widgets(self):
         # メインコンテナ
@@ -197,6 +209,7 @@ class TwitchBotApp:
         ctk.CTkButton(action_bar, text="① トークン認証", command=self.start_auth, fg_color=ACCENT_SECONDARY, hover_color="#1EA4D8", text_color="#0B1220", **button_opts).grid(row=0, column=0, sticky="ew", pady=3)
         ctk.CTkButton(action_bar, text="② BOT起動", command=self.start_bot, fg_color=ACCENT, hover_color="#16A34A", text_color="#0B1220", **button_opts).grid(row=1, column=0, sticky="ew", pady=3)
         ctk.CTkButton(action_bar, text="③ BOT停止", command=self.stop_bot, fg_color="#EF4444", hover_color="#DC2626", text_color="#FFFFFF", **button_opts).grid(row=2, column=0, sticky="ew", pady=3)
+        ctk.CTkButton(action_bar, text="🚪 ログアウト", command=self.logout, fg_color="#6B7280", hover_color="#4B5563", text_color="#FFFFFF", **button_opts).grid(row=3, column=0, sticky="ew", pady=3)
 
         # ===== コントロール群 =====
         controls = ctk.CTkFrame(surface, fg_color="transparent")
@@ -571,8 +584,12 @@ class TwitchBotApp:
         ctk.CTkButton(path_row, text="デフォルトに戻す", width=140,
                       command=lambda: self.chat_html_path.set(self._default_chat_html_path(""))).grid(row=0, column=1)
 
+        # HTML出力のコメント表示順序
+        ctk.CTkLabel(frm_set, text="コメント表示順序", font=("Arial", 12)).grid(row=row_base+7, column=0, sticky="w", pady=(8, 2))
+        ctk.CTkSwitch(frm_set, text="上が新しいコメント（オフ＝下が新しい）", variable=self.chat_html_newest_first, font=("Arial", 11)).grid(row=row_base+7, column=1, sticky="w", pady=(8, 2))
+
         # イベント効果音
-        event_row = 22
+        event_row = 23
         ctk.CTkLabel(frm_set, text="イベント効果音 (TTS前に再生):", font=("Arial", 14, "bold")).grid(row=event_row, column=0, sticky="w", pady=(16, 0))
 
         # ビッツ効果音
@@ -659,6 +676,7 @@ class TwitchBotApp:
             self.config["comment_bubble_style"] = self.comment_bubble_style.get()
             self.config["chat_html_output"] = self.chat_html_output.get()
             self.config["chat_html_path"] = self.chat_html_path.get().strip()
+            self.config["chat_html_newest_first"] = self.chat_html_newest_first.get()
 
             # VOICEVOX Managerのパスを更新
             if self.voicevox_path.get().strip() and hasattr(self, "voicevox_manager"):
@@ -852,18 +870,31 @@ class TwitchBotApp:
             return os.path.join(appdata, "Kototsuna", "templates", "chat", "index.html")
         return os.path.join(os.getcwd(), "chat_output.html")
 
-    def _export_chat_html(self):
-        if not self.chat_html_output.get():
+    def _export_chat_html(self, force=False):
+        """
+        チャットHTMLをファイルに書き出す
+
+        Args:
+            force: Trueの場合、トグルの状態に関わらず強制的にエクスポート
+        """
+        if not force and not self.chat_html_output.get():
             return
+
         path = self.chat_html_path.get().strip() or self._default_chat_html_path("")
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
+            # ディレクトリを作成（存在しない場合）
+            dir_path = os.path.dirname(path)
+            if dir_path and not os.path.exists(dir_path):
+                os.makedirs(dir_path, exist_ok=True)
+                logger.debug(f"Created directory: {dir_path}")
+
+            # HTMLファイルを書き出し
             with open(path, "w", encoding="utf-8") as f:
                 f.write(self._build_chat_html())
             logger.debug(f"Chat HTML exported to {path}")
         except Exception as e:
             logger.error(f"Failed to export chat HTML: {e}", exc_info=True)
-            self.log_message("⚠️ チャットHTMLの書き出しに失敗しました", log_type="error")
+            self.log_message(f"⚠️ チャットHTMLの書き出しに失敗しました: {e}", log_type="error")
 
     def _get_css_style(self, style_name):
         bg = self.comment_bg.get()
@@ -969,7 +1000,7 @@ class TwitchBotApp:
     def _build_chat_html(self) -> str:
         style_name = self.comment_bubble_style.get()
         css = self._get_css_style(style_name)
-        
+
         # テンプレート読み込み (custom.css)
         try:
             # HTML出力先と同じフォルダの custom.css を探す
@@ -981,17 +1012,26 @@ class TwitchBotApp:
         except Exception as e:
             logger.error(f"Failed to load custom.css: {e}")
 
+        # コメントの表示順序を設定に応じて変更
+        chat_list = list(self.chat_history)
+        newest_first = self.chat_html_newest_first.get()
+        if newest_first:
+            chat_list.reverse()  # 上が新しい（逆順）
+
         items = []
-        for c in self.chat_history:
+        for c in chat_list:
             # HTMLエスケープ（簡易）
             name = str(c['name']).replace("<", "&lt;").replace(">", "&gt;")
             message = str(c['message']).replace("<", "&lt;").replace(">", "&gt;")
             translated = str(c['translated']).replace("<", "&lt;").replace(">", "&gt;") if c.get("translated") else ""
-            
+
             sub_html = f"<div class='sub'>{translated}</div>" if translated else ""
-            
+
+            # ユニークなIDを生成（時刻 + 名前で識別）
+            msg_id = f"{c['time']}-{name}".replace(" ", "-").replace(":", "-")
+
             line = f"""
-            <div class='msg'>
+            <div class='msg' data-id='{msg_id}'>
                 <div class='meta'>
                     <span class='time'>{c['time']}</span>
                     <span class='name'>{name}</span>
@@ -1003,25 +1043,77 @@ class TwitchBotApp:
             </div>
             """
             items.append(line)
+
         body = "\n".join(items)
+
+        # スクロール位置の設定（上が新しい場合は上に、下が新しい場合は下に）
+        scroll_script = "window.scrollTo(0, 0);" if newest_first else "window.scrollTo(0, document.body.scrollHeight);"
+
+        # JavaScriptで点滅を最小化：既存のメッセージはそのまま、新しいメッセージだけを追加
+        js_code = f"""
+let lastUpdateTime = 0;
+let updateInterval = null;
+
+function updateChat() {{
+    fetch(window.location.href + '?t=' + Date.now())
+        .then(response => response.text())
+        .then(html => {{
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const newMessages = doc.querySelectorAll('.msg');
+            const existingIds = new Set(
+                Array.from(document.querySelectorAll('.msg')).map(m => m.dataset.id)
+            );
+
+            // 新しいメッセージを検出して追加
+            let hasNewMessages = false;
+            newMessages.forEach(msg => {{
+                if (!existingIds.has(msg.dataset.id)) {{
+                    hasNewMessages = true;
+                }}
+            }});
+
+            // 変更があった場合のみ更新（点滅を最小化）
+            if (hasNewMessages || newMessages.length !== existingIds.size) {{
+                document.body.innerHTML = doc.body.innerHTML;
+                {scroll_script}
+            }}
+        }})
+        .catch(err => console.error('Update failed:', err));
+}}
+
+window.onload = function() {{
+    {scroll_script}
+    // 1.2秒ごとに更新
+    updateInterval = setInterval(updateChat, 1200);
+}};
+"""
+
         return f"""<!DOCTYPE html>
 <html><head><meta charset='utf-8'><style>
 {css}
 </style>
 <script>
-function keepBottom(){{ window.scrollTo(0, document.body.scrollHeight); }}
-window.onload = keepBottom;
-// 簡易ポーリングで自動リロード（疑似SPA）
-setInterval(()=>{{ location.reload(); }}, 1200);
+{js_code}
 </script>
 </head><body>{body}</body></html>"""
 
     def open_chat_html_in_browser(self):
         """チャットHTMLを既定のブラウザで開く"""
         path = self.chat_html_path.get().strip() or self._default_chat_html_path("")
+
+        # HTMLファイルを強制的に生成
+        try:
+            self._export_chat_html(force=True)
+        except Exception as e:
+            logger.error(f"Failed to export HTML: {e}", exc_info=True)
+            self.log_message(f"❌ HTMLファイルの作成に失敗しました: {e}")
+            return
+
         if not os.path.exists(path):
-            self._export_chat_html()
-        
+            self.log_message(f"❌ HTMLファイルが見つかりません: {path}")
+            return
+
         try:
             import webbrowser
             # ファイルパスをURIに変換
@@ -1032,39 +1124,182 @@ setInterval(()=>{{ location.reload(); }}, 1200);
             logger.error(f"Failed to open browser: {e}")
             self.log_message(f"❌ ブラウザの起動に失敗しました: {e}")
 
-    def _on_chat_html_window_close(self):
-        """チャットHTMLウィンドウが閉じられた時の処理"""
+    def _on_qt_window_closed(self):
+        """PyQt6ウィンドウが×で閉じられた時の処理"""
+        # ウィンドウを破棄
+        if self.qt_html_window:
+            try:
+                self.qt_html_window.close()
+            except:
+                pass
+            self.qt_html_window = None
+
         # トグルスイッチをOFFにする
-        self.chat_html_output.set(False)
-        
+        if self.chat_html_output.get():
+            self.chat_html_output.set(False)
+            self._auto_save_settings()
+
+        self.log_message("📄 チャットHTMLビューを閉じました")
+
+    def _on_tkinter_window_closed(self):
+        """Tkinterウィンドウが×で閉じられた時の処理"""
         # ウィンドウを破棄
         if hasattr(self, 'chat_html_window') and self.chat_html_window:
-            self.chat_html_window.destroy()
+            try:
+                self.chat_html_window.destroy()
+            except:
+                pass
             self.chat_html_window = None
-            
+
+        # トグルスイッチをOFFにする
+        if self.chat_html_output.get():
+            self.chat_html_output.set(False)
+            self._auto_save_settings()
+
         self.log_message("📄 チャットHTMLビューを閉じました")
+
+    def _on_chat_html_window_close(self):
+        """チャットHTMLウィンドウが閉じられた時の処理（プログラムから呼ばれる）"""
+        # PyQt6ウィンドウを破棄
+        if self.qt_html_window:
+            try:
+                self.qt_html_window.close()
+            except:
+                pass
+            self.qt_html_window = None
+
+        # Tkinterウィンドウを破棄
+        if hasattr(self, 'chat_html_window') and self.chat_html_window:
+            try:
+                if self.chat_html_window.winfo_exists():
+                    self.chat_html_window.destroy()
+            except:
+                pass
+            self.chat_html_window = None
 
     def toggle_chat_html_output(self):
         """HTML出力スイッチ用"""
         self._auto_save_settings()
         if self.chat_html_output.get():
-            self._export_chat_html()
+            # ウィンドウを開く（内部でHTMLファイルを強制生成）
             self._open_chat_html_window()
         else:
             # スイッチオフ時はウィンドウを閉じる
-            if hasattr(self, 'chat_html_window') and self.chat_html_window and self.chat_html_window.winfo_exists():
-                self._on_chat_html_window_close()
+            self._on_chat_html_window_close()
 
     def _open_chat_html_window(self):
-        """チャットHTMLを専用のTkinterウィンドウで開く（配信用縦長サイズ）"""
+        """チャットHTMLを専用ウィンドウで開く（配信用縦長サイズ）"""
         path = self.chat_html_path.get().strip() or self._default_chat_html_path("")
+
+        # HTMLファイルを強制的に生成（ファイルが存在しない場合や空のチャット履歴でも）
+        try:
+            self._export_chat_html(force=True)
+        except Exception as e:
+            logger.error(f"Failed to export HTML before opening window: {e}", exc_info=True)
+            self.log_message(f"❌ HTMLファイルの作成に失敗しました: {e}")
+            return
+
+        # ファイルが確実に存在することを確認
         if not os.path.exists(path):
-            self._export_chat_html()
+            logger.error(f"HTML file does not exist after export: {path}")
+            self.log_message(f"❌ HTMLファイルが見つかりません: {path}")
+            return
 
         # 既存のウィンドウがあれば閉じる
+        if self.qt_html_window is not None:
+            try:
+                self.qt_html_window.close()
+                self.qt_html_window = None
+            except:
+                pass
+
         if hasattr(self, 'chat_html_window') and self.chat_html_window and self.chat_html_window.winfo_exists():
             self.chat_html_window.destroy()
+            self.chat_html_window = None
 
+        # PyQt6ウィンドウで開く（完全なChromiumブラウザエンジン）
+        try:
+            self._open_chat_html_window_pyqt(path)
+        except ImportError:
+            logger.info("PyQt6 not available, falling back to tkinterweb")
+            self._open_chat_html_window_tkinter(path)
+        except Exception as e:
+            logger.error(f"Failed to open with PyQt6: {e}", exc_info=True)
+            self._open_chat_html_window_tkinter(path)
+
+    def _open_chat_html_window_pyqt(self, path):
+        """PyQt6のQWebEngineViewを使用してHTMLを表示（完全なChromiumブラウザエンジン）"""
+        # ファイルの存在を再確認
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"HTML file not found: {path}")
+
+        from PyQt6.QtWidgets import QApplication, QMainWindow
+        from PyQt6.QtWebEngineWidgets import QWebEngineView
+        from PyQt6.QtCore import QUrl, QTimer
+        from PyQt6.QtGui import QIcon
+        import sys
+
+        # QApplicationインスタンスを取得または作成
+        if not QApplication.instance():
+            self.qt_app = QApplication(sys.argv)
+        else:
+            self.qt_app = QApplication.instance()
+
+        # HTMLビューウィンドウクラス
+        class HtmlViewerWindow(QMainWindow):
+            def __init__(self, html_path, parent_gui):
+                super().__init__()
+                self.html_path = html_path
+                self.parent_gui = parent_gui
+                self.setWindowTitle("チャット - 配信用")
+                self.setGeometry(50, 50, 350, 900)
+
+                # 常に最前面に表示
+                self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+
+                # WebEngineViewを作成
+                self.browser = QWebEngineView()
+                self.setCentralWidget(self.browser)
+
+                # HTMLを読み込む（初回のみ、以降はJavaScriptで自動更新）
+                abs_path = os.path.abspath(self.html_path)
+                file_url = QUrl.fromLocalFile(abs_path)
+
+                # デバッグ用：URLをログ出力
+                logger.debug(f"Loading HTML from: {abs_path}")
+                logger.debug(f"File URL: {file_url.toString()}")
+
+                self.browser.setUrl(file_url)
+
+            def closeEvent(self, event):
+                """ウィンドウが閉じられたときの処理"""
+                # 親GUIのトグルスイッチをOFFにする
+                if self.parent_gui and self.parent_gui.chat_html_output.get():
+                    self.parent_gui.master.after(0, self.parent_gui._on_qt_window_closed)
+                event.accept()
+
+        # Qt WindowFlagsをインポート
+        from PyQt6.QtCore import Qt
+
+        # ウィンドウを作成
+        self.qt_html_window = HtmlViewerWindow(path, self)
+        self.qt_html_window.show()
+
+        # Qt のイベントループを別スレッドで処理
+        def process_qt_events():
+            """Qtのイベントを定期的に処理"""
+            if self.qt_app and self.qt_html_window:
+                self.qt_app.processEvents()
+                # 100msごとに再度呼び出す
+                self.master.after(100, process_qt_events)
+
+        # イベント処理を開始
+        self.master.after(100, process_qt_events)
+
+        self.log_message(f"📄 チャットHTMLビューを開きました (Chromiumエンジン) - {path}")
+
+    def _open_chat_html_window_tkinter(self, path):
+        """Tkinterベースのフォールバック表示（tkinterweb or シンプルテキスト）"""
         # 新しいウィンドウを作成
         self.chat_html_window = tk.Toplevel(self.master)
         self.chat_html_window.title("チャット - 配信用")
@@ -1073,9 +1308,9 @@ setInterval(()=>{{ location.reload(); }}, 1200);
 
         # ウィンドウを常に最前面に表示（配信用）
         self.chat_html_window.attributes('-topmost', True)
-        
-        # 閉じるボタンの動作を設定（同期のため）
-        self.chat_html_window.protocol("WM_DELETE_WINDOW", self._on_chat_html_window_close)
+
+        # 閉じるボタンの動作を設定（×ボタンで閉じたときにトグルもOFFにする）
+        self.chat_html_window.protocol("WM_DELETE_WINDOW", self._on_tkinter_window_closed)
 
         try:
             # tkinterwebを試す
@@ -1601,6 +1836,29 @@ setInterval(()=>{{ location.reload(); }}, 1200);
         self._set_status("トークン認証を開始します。ブラウザを開いてください。", "info")
         threading.Thread(target=self.run_auth_flow, args=(client_id,), daemon=True).start()
 
+    def _check_saved_token(self):
+        """起動時に保存されたトークンをチェックして自動ログイン"""
+        saved_token = self.config.get("twitch_access_token", "").strip()
+
+        if not saved_token:
+            logger.info("No saved token found.")
+            return
+
+        logger.info("Checking saved token...")
+        self.log_message("🔍 保存されたトークンをチェックしています...")
+
+        # トークンの有効性をチェック
+        if validate_token(saved_token):
+            self.token = saved_token
+            self.log_message("✅ 保存されたトークンが有効です。自動ログインしました。")
+            self._set_status("保存されたトークンで自動ログイン完了", "success")
+        else:
+            logger.warning("Saved token is invalid.")
+            self.log_message("⚠ 保存されたトークンが無効です。再認証が必要です。")
+            # 無効なトークンを削除
+            self.config["twitch_access_token"] = ""
+            save_config(self.config)
+
     def run_auth_flow(self, client_id):
         url = build_auth_url(client_id)
 
@@ -1640,9 +1898,33 @@ setInterval(()=>{{ location.reload(); }}, 1200);
         if self.token:
             self.log_message("✅ トークンを取得しました")
             self._set_status("トークン取得済み。BOTを起動できます。", "success")
+
+            # トークンをconfig.jsonに保存（次回起動時の自動ログイン用）
+            self.config["twitch_access_token"] = self.token
+            save_config(self.config)
+            self.log_message("💾 トークンを保存しました。次回から自動ログインします。")
         else:
             self.log_message("⚠ トークンの取得に失敗しました。")
             self._set_status("トークンの取得に失敗しました。再試行してください。", "error")
+
+    def logout(self):
+        """保存されたトークンをクリアしてログアウト"""
+        if not self.token and not self.config.get("twitch_access_token"):
+            messagebox.showinfo("情報", "ログインしていません。")
+            return
+
+        # BOTが起動中の場合は停止
+        if self.bot_instance:
+            self.stop_bot()
+
+        # トークンをクリア
+        self.token = None
+        self.config["twitch_access_token"] = ""
+        save_config(self.config)
+
+        self.log_message("🚪 ログアウトしました。")
+        self._set_status("ログアウト完了。再度認証が必要です。", "info")
+        messagebox.showinfo("ログアウト", "ログアウトしました。\n再度ログインするには「① トークン認証」を実行してください。")
 
     def start_bot(self):
         # 既存のBOTがあれば停止（多重起動防止）

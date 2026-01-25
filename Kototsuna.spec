@@ -11,6 +11,14 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('tkinterweb')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+# PyQt6とWebEngineを収集（完全なブラウザエンジンのHTML表示用）
+for module in ['PyQt6', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets', 'PyQt6.QtWebEngineWidgets', 'PyQt6.QtWebEngineCore']:
+    try:
+        tmp_ret = collect_all(module)
+        datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+    except Exception as e:
+        print(f"Warning: Could not collect {module}: {e}")
+
 # srcパッケージ内の全サブモジュールを収集
 hiddenimports += collect_submodules('src')
 

@@ -1,6 +1,7 @@
 import http.server, socketserver, urllib.parse, json
 from dotenv import load_dotenv
 import os
+import requests
 from src.logger import logger
 
 REDIRECT_URI = 'http://localhost:8787/redirect.html'
@@ -108,3 +109,37 @@ def run_auth_server_and_get_token():
         logger.debug("Server stopped.")
 
     return token_result.get("access_token")
+
+def validate_token(access_token):
+    """
+    Twitch APIでアクセストークンの有効性を検証する
+
+    Args:
+        access_token: 検証するアクセストークン（oauth:プレフィックス付きまたはなし）
+
+    Returns:
+        bool: トークンが有効な場合True、無効な場合False
+    """
+    # oauth:プレフィックスを除去
+    token = access_token
+    if token.startswith("oauth:"):
+        token = token[6:]
+
+    try:
+        response = requests.get(
+            "https://id.twitch.tv/oauth2/validate",
+            headers={"Authorization": f"OAuth {token}"},
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            logger.info(f"Token is valid. User: {data.get('login', 'unknown')}, Expires in: {data.get('expires_in', 0)}s")
+            return True
+        else:
+            logger.warning(f"Token validation failed: {response.status_code}")
+            return False
+
+    except Exception as e:
+        logger.error(f"Failed to validate token: {e}")
+        return False
