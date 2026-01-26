@@ -34,9 +34,12 @@ DEFAULT_CONFIG = {
     "chat_html_output": False,
     "chat_html_path": "",
     "chat_html_newest_first": False,  # True: 上が新しい, False: 下が新しい
+    # UI テーマ
+    "ui_theme": "default",  # default / gradient / minimal / cyberpunk
 }
 
 VALID_TRANSLATE_MODES = {"自動", "英→日", "日→英"}
+VALID_UI_THEMES = {"default", "gradient", "minimal", "cyberpunk"}
 
 def validate_config(config_data):
     """
@@ -51,6 +54,12 @@ def validate_config(config_data):
     if validated.get("translate_mode") not in VALID_TRANSLATE_MODES:
         logger.warning(f"translate_mode is invalid: {validated.get('translate_mode')}, fallback to 自動")
         validated["translate_mode"] = "自動"
+        changed = True
+
+    # ui_theme
+    if validated.get("ui_theme") not in VALID_UI_THEMES:
+        logger.warning(f"ui_theme is invalid: {validated.get('ui_theme')}, fallback to default")
+        validated["ui_theme"] = "default"
         changed = True
 
     # ブール値はbool化
@@ -77,6 +86,7 @@ def validate_config(config_data):
         "comment_log_font",
         "comment_bubble_style",
         "chat_html_path",
+        "ui_theme",
     ]:
         if validated.get(key) is None:
             validated[key] = DEFAULT_CONFIG.get(key, "")

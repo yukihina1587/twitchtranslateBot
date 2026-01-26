@@ -37,18 +37,90 @@ from src import translator
 from src.resource_monitor import get_monitor
 
 # 外観設定 / テーマ
+# 初期設定（後でconfigから読み込んだテーマで上書き）
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-# UI theme constants
-APP_BG = "#0C1424"
-CARD_BG = "#111B2E"
-PANEL_BG = "#0E1728"
-BORDER = "#1F2C43"
-ACCENT = "#22C55E"
-ACCENT_SECONDARY = "#38BDF8"
-ACCENT_WARN = "#F97316"
-TEXT_SUBTLE = "#9BAEC6"
+# テーマ定義
+THEMES = {
+    "gradient": {  # 案1: グラデーション × グラスモーフィズム
+        "name": "グラデーション（モダン）",
+        "APP_BG": "#0A0E27",
+        "APP_BG_GRADIENT": "#1A1535",  # グラデーション用
+        "CARD_BG": "#1C1F3A",
+        "CARD_BG_GLASS": "#1C1F3A",  # 半透明風
+        "PANEL_BG": "#151830",
+        "BORDER": "#2D3250",
+        "ACCENT": "#00D9FF",  # シアン
+        "ACCENT_SECONDARY": "#FF00E5",  # マゼンタ
+        "ACCENT_WARN": "#FFB800",
+        "TEXT_PRIMARY": "#FFFFFF",
+        "TEXT_SUBTLE": "#A0A8C8",
+        "SHADOW": "#000000",
+        "GLOW": True,  # グロー効果を有効化
+    },
+    "minimal": {  # 案2: ミニマリスト × マテリアルデザイン
+        "name": "ミニマル（シンプル）",
+        "APP_BG": "#FAFAFA",
+        "APP_BG_GRADIENT": "#F5F5F5",
+        "CARD_BG": "#FFFFFF",
+        "CARD_BG_GLASS": "#FFFFFF",
+        "PANEL_BG": "#F8F9FA",
+        "BORDER": "#E0E0E0",
+        "ACCENT": "#1976D2",  # Material Blue
+        "ACCENT_SECONDARY": "#0288D1",
+        "ACCENT_WARN": "#F57C00",
+        "TEXT_PRIMARY": "#212121",
+        "TEXT_SUBTLE": "#757575",
+        "SHADOW": "#00000015",
+        "GLOW": False,
+    },
+    "cyberpunk": {  # 案3: サイバーパンク × ゲーミング
+        "name": "サイバーパンク（ゲーミング）",
+        "APP_BG": "#000000",
+        "APP_BG_GRADIENT": "#0D0208",
+        "CARD_BG": "#0A0A0A",
+        "CARD_BG_GLASS": "#1A1A1A",
+        "PANEL_BG": "#050505",
+        "BORDER": "#FF00FF",  # ネオンピンク
+        "ACCENT": "#00FFFF",  # ネオンシアン
+        "ACCENT_SECONDARY": "#FF00FF",  # ネオンマゼンタ
+        "ACCENT_WARN": "#FFFF00",  # ネオンイエロー
+        "TEXT_PRIMARY": "#00FFFF",
+        "TEXT_SUBTLE": "#00FFFF80",
+        "SHADOW": "#00FFFF40",
+        "GLOW": True,  # グロー効果強め
+    },
+    "default": {  # 現在のデフォルトテーマ（既存）
+        "name": "デフォルト（クラシック）",
+        "APP_BG": "#0C1424",
+        "APP_BG_GRADIENT": "#0C1424",
+        "CARD_BG": "#111B2E",
+        "CARD_BG_GLASS": "#111B2E",
+        "PANEL_BG": "#0E1728",
+        "BORDER": "#1F2C43",
+        "ACCENT": "#22C55E",
+        "ACCENT_SECONDARY": "#38BDF8",
+        "ACCENT_WARN": "#F97316",
+        "TEXT_PRIMARY": "#FFFFFF",
+        "TEXT_SUBTLE": "#9BAEC6",
+        "SHADOW": "#00000020",
+        "GLOW": False,
+    }
+}
+
+# デフォルトテーマを設定（後で設定から変更可能）
+CURRENT_THEME = "default"
+
+# UI theme constants（動的に更新される）
+APP_BG = THEMES[CURRENT_THEME]["APP_BG"]
+CARD_BG = THEMES[CURRENT_THEME]["CARD_BG"]
+PANEL_BG = THEMES[CURRENT_THEME]["PANEL_BG"]
+BORDER = THEMES[CURRENT_THEME]["BORDER"]
+ACCENT = THEMES[CURRENT_THEME]["ACCENT"]
+ACCENT_SECONDARY = THEMES[CURRENT_THEME]["ACCENT_SECONDARY"]
+ACCENT_WARN = THEMES[CURRENT_THEME]["ACCENT_WARN"]
+TEXT_SUBTLE = THEMES[CURRENT_THEME]["TEXT_SUBTLE"]
 FONT_TITLE = ("Segoe UI Semibold", 18)
 FONT_SUBTITLE = ("Segoe UI", 13)
 FONT_LABEL = ("Segoe UI Semibold", 12)
@@ -78,6 +150,10 @@ class TwitchBotApp:
         self.config = load_config()
         translator.set_translation_filters(self.config.get("translation_filters", []))
         translator.set_translation_dictionary(self.config.get("translation_dictionary", []))
+
+        # テーマ適用（widgetビルド前に実行）
+        saved_theme = self.config.get("ui_theme", "default")
+        self._apply_theme_colors(saved_theme)
 
         self.token = None
         self.bot_instance = None
@@ -152,6 +228,69 @@ class TwitchBotApp:
 
         # 起動時に保存されたトークンをチェックして自動ログイン
         self.master.after(1000, self._check_saved_token)
+
+    def _apply_theme_colors(self, theme_name):
+        """
+        テーマを適用してモジュールレベルの色変数を更新
+
+        Args:
+            theme_name: テーマ名 (default / gradient / minimal / cyberpunk)
+        """
+        global CURRENT_THEME, APP_BG, CARD_BG, PANEL_BG, BORDER
+        global ACCENT, ACCENT_SECONDARY, ACCENT_WARN, TEXT_SUBTLE
+
+        if theme_name not in THEMES:
+            logger.warning(f"Unknown theme: {theme_name}, falling back to default")
+            theme_name = "default"
+
+        theme = THEMES[theme_name]
+        CURRENT_THEME = theme_name
+
+        # 色変数を更新
+        APP_BG = theme["APP_BG"]
+        CARD_BG = theme["CARD_BG"]
+        PANEL_BG = theme["PANEL_BG"]
+        BORDER = theme["BORDER"]
+        ACCENT = theme["ACCENT"]
+        ACCENT_SECONDARY = theme["ACCENT_SECONDARY"]
+        ACCENT_WARN = theme["ACCENT_WARN"]
+        TEXT_SUBTLE = theme["TEXT_SUBTLE"]
+
+        # ライトモード/ダークモードの切り替え
+        if theme_name == "minimal":
+            ctk.set_appearance_mode("Light")
+        else:
+            ctk.set_appearance_mode("Dark")
+
+        logger.info(f"Theme applied: {theme['name']} ({theme_name})")
+
+    def _on_theme_changed(self, display_name):
+        """
+        テーマ選択が変更されたときのコールバック
+
+        Args:
+            display_name: 表示名 (例: "グラデーション（モダン）")
+        """
+        # 表示名からテーマキーへの変換マップ
+        display_to_key = {
+            "デフォルト（クラシック）": "default",
+            "グラデーション（モダン）": "gradient",
+            "ミニマル（シンプル・ライトモード）": "minimal",
+            "サイバーパンク（ゲーミング）": "cyberpunk"
+        }
+
+        theme_key = display_to_key.get(display_name, "default")
+
+        # テーマを適用
+        self._apply_theme_colors(theme_key)
+
+        # 設定を保存
+        self.config["ui_theme"] = theme_key
+        save_config(self.config)
+
+        # ユーザーに通知
+        self.log_message(f"✨ テーマを '{THEMES[theme_key]['name']}' に変更しました")
+        self.log_message("⚠️ 一部の色変更を反映するには、アプリを再起動してください")
 
     def build_widgets(self):
         # メインコンテナ
@@ -484,38 +623,74 @@ class TwitchBotApp:
         frm_set.pack(fill="both", expand=True, padx=10, pady=10)
         frm_set.grid_columnconfigure(1, weight=1)
 
-        # プラットフォーム設定
-        ctk.CTkLabel(frm_set, text="配信プラットフォーム設定", font=("Arial", 16, "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(10, 10))
-        ctk.CTkLabel(frm_set, text="Client ID (Twitch):", font=("Arial", 14, "bold")).grid(row=1, column=0, sticky="w", pady=(10, 0))
-        ctk.CTkEntry(frm_set, textvariable=self.client_id, width=300).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 5))
+        # === UI テーマ設定 ===
+        ctk.CTkLabel(frm_set, text="UIテーマ", font=("Arial", 16, "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(10, 10))
+        ctk.CTkLabel(frm_set, text="テーマを選択:", font=("Arial", 14, "bold")).grid(row=1, column=0, sticky="w", pady=(10, 0))
 
-        btn_twitch_help = ctk.CTkButton(frm_set, text="Twitch開発者コンソールへ (ID取得)", 
+        # テーマ名とその説明を含むマップ
+        theme_display_names = {
+            "default": "デフォルト（クラシック）",
+            "gradient": "グラデーション（モダン）",
+            "minimal": "ミニマル（シンプル・ライトモード）",
+            "cyberpunk": "サイバーパンク（ゲーミング）"
+        }
+
+        # 現在のテーマを表示名に変換
+        current_theme_key = self.config.get("ui_theme", "default")
+        current_theme_display = theme_display_names.get(current_theme_key, theme_display_names["default"])
+
+        # テーマ選択用のStringVar（表示名を格納）
+        self.ui_theme_var = tk.StringVar(value=current_theme_display)
+
+        # OptionMenu作成
+        theme_menu = ctk.CTkOptionMenu(
+            frm_set,
+            values=[theme_display_names[k] for k in ["default", "gradient", "minimal", "cyberpunk"]],
+            variable=self.ui_theme_var,
+            command=self._on_theme_changed,
+            width=280
+        )
+        theme_menu.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 5))
+
+        ctk.CTkLabel(
+            frm_set,
+            text="💡 テーマを変更するとアプリの外観が即座に切り替わります",
+            font=("Arial", 10),
+            text_color="gray"
+        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(0, 15))
+
+        # プラットフォーム設定
+        ctk.CTkLabel(frm_set, text="配信プラットフォーム設定", font=("Arial", 16, "bold")).grid(row=4, column=0, columnspan=3, sticky="w", pady=(10, 10))
+        ctk.CTkLabel(frm_set, text="Client ID (Twitch):", font=("Arial", 14, "bold")).grid(row=5, column=0, sticky="w", pady=(10, 0))
+        ctk.CTkEntry(frm_set, textvariable=self.client_id, width=300).grid(row=6, column=0, columnspan=2, sticky="ew", pady=(0, 5))
+
+        btn_twitch_help = ctk.CTkButton(frm_set, text="Twitch開発者コンソールへ (ID取得)",
                                       command=lambda: webbrowser.open("https://dev.twitch.tv/console/apps"),
                                       fg_color="gray",
                                       width=200)
-        btn_twitch_help.grid(row=2, column=2, padx=10, pady=(0, 5), sticky="w")
+        btn_twitch_help.grid(row=6, column=2, padx=10, pady=(0, 5), sticky="w")
 
         # 翻訳API設定
-        ctk.CTkLabel(frm_set, text="翻訳API設定", font=("Arial", 16, "bold")).grid(row=3, column=0, columnspan=3, sticky="w", pady=(20, 10))
-        ctk.CTkLabel(frm_set, text="DeepL API Key:", font=("Arial", 14, "bold")).grid(row=4, column=0, sticky="w", pady=(10, 0))
-        ctk.CTkEntry(frm_set, textvariable=self.deepl_key, width=300, show="*").grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 5))
+        ctk.CTkLabel(frm_set, text="翻訳API設定", font=("Arial", 16, "bold")).grid(row=7, column=0, columnspan=3, sticky="w", pady=(20, 10))
+        ctk.CTkLabel(frm_set, text="DeepL API Key:", font=("Arial", 14, "bold")).grid(row=8, column=0, sticky="w", pady=(10, 0))
+        ctk.CTkEntry(frm_set, textvariable=self.deepl_key, width=300, show="*").grid(row=9, column=0, columnspan=2, sticky="ew", pady=(0, 5))
 
         btn_deepl_help = ctk.CTkButton(frm_set, text="DeepL API登録ページへ",
                                       command=lambda: webbrowser.open("https://www.deepl.com/pro-api"),
                                       fg_color="gray",
                                       width=200)
-        btn_deepl_help.grid(row=5, column=2, padx=10, pady=(0, 5), sticky="w")
+        btn_deepl_help.grid(row=9, column=2, padx=10, pady=(0, 5), sticky="w")
 
         # 音声認識API設定
-        ctk.CTkLabel(frm_set, text="音声認識API設定", font=("Arial", 16, "bold")).grid(row=6, column=0, columnspan=3, sticky="w", pady=(20, 10))
-        ctk.CTkLabel(frm_set, text="Gladia API Key (音声認識):", font=("Arial", 14, "bold")).grid(row=7, column=0, sticky="w", pady=(10, 0))
-        ctk.CTkEntry(frm_set, textvariable=self.gladia_key, width=300, show="*").grid(row=8, column=0, columnspan=2, sticky="ew", pady=(0, 5))
+        ctk.CTkLabel(frm_set, text="音声認識API設定", font=("Arial", 16, "bold")).grid(row=10, column=0, columnspan=3, sticky="w", pady=(20, 10))
+        ctk.CTkLabel(frm_set, text="Gladia API Key (音声認識):", font=("Arial", 14, "bold")).grid(row=11, column=0, sticky="w", pady=(10, 0))
+        ctk.CTkEntry(frm_set, textvariable=self.gladia_key, width=300, show="*").grid(row=12, column=0, columnspan=2, sticky="ew", pady=(0, 5))
 
         btn_gladia_help = ctk.CTkButton(frm_set, text="Gladia登録ページへ (月10h無料)",
                                        command=lambda: webbrowser.open("https://www.gladia.io"),
                                        fg_color="gray",
                                        width=200)
-        btn_gladia_help.grid(row=8, column=2, padx=10, pady=(0, 5), sticky="w")
+        btn_gladia_help.grid(row=12, column=2, padx=10, pady=(0, 5), sticky="w")
 
         # Gladia使用状況表示
         usage_sec = self.config.get("gladia_usage_seconds", 0)
@@ -529,14 +704,14 @@ class TwitchBotApp:
                                                text=f"{usage_text}\n現在のプロバイダー: {provider_text}",
                                                text_color="gray",
                                                font=("Arial", 11))
-        self.gladia_usage_label.grid(row=9, column=0, columnspan=3, sticky="w")
+        self.gladia_usage_label.grid(row=13, column=0, columnspan=3, sticky="w")
 
         # 読み上げ設定
-        ctk.CTkLabel(frm_set, text="読み上げ設定", font=("Arial", 16, "bold")).grid(row=10, column=0, columnspan=3, sticky="w", pady=(20, 10))
-        ctk.CTkLabel(frm_set, text="VOICEVOX Engine パス:", font=("Arial", 14, "bold")).grid(row=11, column=0, sticky="w", pady=(10, 0))
+        ctk.CTkLabel(frm_set, text="読み上げ設定", font=("Arial", 16, "bold")).grid(row=14, column=0, columnspan=3, sticky="w", pady=(20, 10))
+        ctk.CTkLabel(frm_set, text="VOICEVOX Engine パス:", font=("Arial", 14, "bold")).grid(row=15, column=0, sticky="w", pady=(10, 0))
 
         voicevox_frame = ctk.CTkFrame(frm_set, fg_color="transparent")
-        voicevox_frame.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(0, 5))
+        voicevox_frame.grid(row=16, column=0, columnspan=2, sticky="ew", pady=(0, 5))
         voicevox_frame.grid_columnconfigure(0, weight=1)
 
         ctk.CTkEntry(voicevox_frame, textvariable=self.voicevox_path, width=250).grid(row=0, column=0, sticky="ew", padx=(0, 5))
@@ -553,7 +728,25 @@ class TwitchBotApp:
                                           command=lambda: webbrowser.open("https://voicevox.hiroshiba.jp/"),
                                           fg_color="gray",
                                           width=200)
-        btn_voicevox_help.grid(row=12, column=2, padx=10, pady=(0, 5), sticky="w")
+        btn_voicevox_help.grid(row=16, column=2, padx=10, pady=(0, 5), sticky="w")
+
+        # ヒントラベル
+        ctk.CTkLabel(
+            frm_set,
+            text="💡 ヒント: 「参照...」ボタンでVOICEVOXフォルダ内の run.exe を選択してください",
+            font=("Arial", 10),
+            text_color="gray"
+        ).grid(row=16, column=0, columnspan=2, sticky="w", pady=(30, 0))
+
+        # テストボタン
+        ctk.CTkButton(
+            frm_set,
+            text="🔍 VOICEVOX接続テスト",
+            command=self.test_voicevox_connection,
+            fg_color="#6B7280",
+            hover_color="#4B5563",
+            width=200
+        ).grid(row=16, column=2, padx=10, pady=(30, 0), sticky="w")
 
         # VOICEVOX自動起動チェックボックス
         ctk.CTkCheckBox(
@@ -561,10 +754,20 @@ class TwitchBotApp:
             text="読み上げ開始時にVOICEVOX Engineを自動起動",
             variable=self.voicevox_auto_start,
             font=("Arial", 12)
-        ).grid(row=13, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        ).grid(row=17, column=0, columnspan=2, sticky="w", pady=(5, 0))
+
+        # TTS診断ボタン
+        ctk.CTkButton(
+            frm_set,
+            text="🩺 読み上げ診断",
+            command=self.diagnose_tts,
+            fg_color="#8B5CF6",
+            hover_color="#7C3AED",
+            width=200
+        ).grid(row=17, column=2, padx=10, pady=(5, 0), sticky="w")
 
         # === コメントログ外観 ===
-        row_base = 14
+        row_base = 18
         ctk.CTkLabel(frm_set, text="コメントログ外観", font=("Arial", 14, "bold")).grid(row=row_base, column=0, sticky="w", pady=(16, 4))
         ctk.CTkLabel(frm_set, text="背景色", font=("Arial", 12)).grid(row=row_base+1, column=0, sticky="w")
         ctk.CTkEntry(frm_set, textvariable=self.comment_bg, width=140).grid(row=row_base+1, column=1, sticky="w", pady=2)
@@ -589,7 +792,7 @@ class TwitchBotApp:
         ctk.CTkSwitch(frm_set, text="上が新しいコメント（オフ＝下が新しい）", variable=self.chat_html_newest_first, font=("Arial", 11)).grid(row=row_base+7, column=1, sticky="w", pady=(8, 2))
 
         # イベント効果音
-        event_row = 23
+        event_row = 27
         ctk.CTkLabel(frm_set, text="イベント効果音 (TTS前に再生):", font=("Arial", 14, "bold")).grid(row=event_row, column=0, sticky="w", pady=(16, 0))
 
         # ビッツ効果音
@@ -621,17 +824,202 @@ class TwitchBotApp:
 
         ctk.CTkLabel(frm_set, text="※ 設定変更後は必ず「保存」を押してください。\n※ チャンネル名なども保存されます。", text_color="gray").grid(row=event_row+5, column=0, columnspan=3)
 
+    def diagnose_tts(self):
+        """TTS（読み上げ）システムの診断を実行"""
+        self.log_message("🩺 === TTS診断開始 ===")
+
+        # 1. TTSエンジンの状態確認
+        if self.tts_started:
+            self.log_message(f"✅ TTSエンジン: 起動中 (モード: {self.tts.engine_mode})")
+        else:
+            self.log_message("⚠️ TTSエンジン: 停止中")
+
+        # 2. VOICEVOX Engineの状態確認
+        voicevox_running = self.voicevox_manager.is_running()
+        if voicevox_running:
+            self.log_message(f"✅ VOICEVOX Engine: 起動中 ({self.voicevox_manager.api_url})")
+        else:
+            self.log_message(f"❌ VOICEVOX Engine: 停止中 ({self.voicevox_manager.api_url})")
+
+        # 3. pygameオーディオの状態確認
+        try:
+            from src.tts import PYGAME_IMPORTED, AUDIO_AVAILABLE
+            if PYGAME_IMPORTED:
+                if AUDIO_AVAILABLE:
+                    self.log_message("✅ pygameオーディオ: 利用可能")
+                else:
+                    self.log_message("⚠️ pygameオーディオ: インポート済みだが初期化されていない")
+            else:
+                self.log_message("❌ pygame: インストールされていない")
+        except Exception as e:
+            self.log_message(f"⚠️ pygameチェックエラー: {e}")
+
+        # 4. pyttsx3の状態確認
+        try:
+            from src.tts import PYTTSX3_AVAILABLE
+            if PYTTSX3_AVAILABLE:
+                self.log_message("✅ pyttsx3: 利用可能（フォールバックエンジン）")
+            else:
+                self.log_message("❌ pyttsx3: インストールされていない")
+        except Exception as e:
+            self.log_message(f"⚠️ pyttsx3チェックエラー: {e}")
+
+        # 5. テスト読み上げ
+        self.log_message("🔊 テスト読み上げを実行中...")
+
+        def test_speak():
+            test_text = "こんにちは、これはテストです"
+            try:
+                # TTSが起動していない場合は起動を試みる
+                if not self.tts_started:
+                    self.log_message("TTSエンジンを起動しています...")
+                    success = self.tts.start()
+                    if success:
+                        self.tts_started = True
+                        self.log_message(f"✅ TTSエンジンが起動しました (モード: {self.tts.engine_mode})")
+                    else:
+                        self.master.after(0, lambda: self.log_message("❌ TTSエンジンの起動に失敗しました"))
+                        return
+
+                # テスト読み上げを強制実行
+                self.tts.speak(test_text, force=True)
+                self.master.after(0, lambda: self.log_message(f"✅ テスト読み上げを送信しました: {test_text}"))
+                self.master.after(0, lambda: self.log_message("💡 数秒待っても音声が聞こえない場合:"))
+                self.master.after(0, lambda: self.log_message("  • 音量設定を確認"))
+                self.master.after(0, lambda: self.log_message("  • 別のオーディオアプリを閉じる"))
+                self.master.after(0, lambda: self.log_message("  • VOICEVOX Engineを再起動"))
+
+            except Exception as e:
+                self.master.after(0, lambda: self.log_message(f"❌ テスト読み上げエラー: {e}"))
+                logger.error(f"Test speak error: {e}", exc_info=True)
+
+        # 別スレッドでテスト実行
+        threading.Thread(target=test_speak, daemon=True).start()
+
+        self.log_message("🩺 === TTS診断完了 ===")
+
+    def test_voicevox_connection(self):
+        """VOICEVOX Engineへの接続をテスト"""
+        voicevox_path = self.voicevox_path.get().strip()
+
+        # パスのチェック
+        if not voicevox_path:
+            messagebox.showwarning(
+                "接続テスト",
+                "VOICEVOX Engineのパスが設定されていません。\n\n"
+                "「参照...」ボタンから run.exe を選択してください。"
+            )
+            return
+
+        abs_path = os.path.abspath(voicevox_path)
+        if not os.path.exists(abs_path):
+            messagebox.showerror(
+                "接続テスト - ファイルが見つかりません",
+                f"指定されたファイルが見つかりません:\n{abs_path}\n\n"
+                f"設定値: {voicevox_path}\n\n"
+                "「参照...」ボタンから正しいファイルを選択してください。"
+            )
+            self.log_message(f"❌ ファイルが見つかりません: {abs_path}")
+            return
+
+        # 実行可能かチェック
+        if not os.access(abs_path, os.X_OK):
+            messagebox.showwarning(
+                "接続テスト - 実行権限なし",
+                f"ファイルに実行権限がありません:\n{abs_path}\n\n"
+                "ファイルのプロパティを確認してください。"
+            )
+            self.log_message(f"⚠️ 実行権限がありません: {abs_path}")
+            return
+
+        # VOICEVOX Engineが起動しているかチェック
+        if self.voicevox_manager.is_running():
+            messagebox.showinfo(
+                "接続テスト - 成功",
+                "✅ VOICEVOX Engineは既に起動しています！\n\n"
+                f"API URL: {self.voicevox_manager.api_url}\n"
+                "読み上げ機能が使用できます。"
+            )
+            self.log_message("✅ VOICEVOX Engine接続テスト: 成功（既に起動中）")
+            return
+
+        # 起動を試みる
+        self.log_message("🔍 VOICEVOX Engineへの接続をテストしています...")
+        messagebox.showinfo(
+            "接続テスト",
+            "VOICEVOX Engineの起動を試みます。\n\n"
+            "数秒かかることがあります..."
+        )
+
+        def test_thread():
+            success = self.voicevox_manager.start()
+            if success:
+                self.master.after(0, lambda: messagebox.showinfo(
+                    "接続テスト - 成功",
+                    f"✅ VOICEVOX Engineの起動に成功しました！\n\n"
+                    f"実行ファイル: {abs_path}\n"
+                    f"API URL: {self.voicevox_manager.api_url}\n\n"
+                    "読み上げ機能が使用できます。"
+                ))
+                self.master.after(0, lambda: self.log_message("✅ VOICEVOX Engine接続テスト: 成功"))
+            else:
+                self.master.after(0, lambda: messagebox.showerror(
+                    "接続テスト - 失敗",
+                    f"❌ VOICEVOX Engineの起動に失敗しました。\n\n"
+                    f"実行ファイル: {abs_path}\n\n"
+                    "考えられる原因:\n"
+                    "• ファイルパスが間違っている\n"
+                    "• ポート50021が既に使用されている\n"
+                    "• 依存ライブラリが不足している\n\n"
+                    "ログを確認してください。"
+                ))
+                self.master.after(0, lambda: self.log_message("❌ VOICEVOX Engine接続テスト: 失敗"))
+
+        threading.Thread(target=test_thread, daemon=True).start()
+
     def browse_voicevox_path(self):
         """VOICEVOX Engineの実行ファイルを選択"""
         file_path = filedialog.askopenfilename(
-            title="VOICEVOX Engineの実行ファイルを選択",
+            title="VOICEVOX Engineの実行ファイルを選択（run.exe）",
             filetypes=[
                 ("実行ファイル", "*.exe" if platform.system() == "Windows" else "*"),
                 ("すべてのファイル", "*.*")
             ]
         )
         if file_path:
-            self.voicevox_path.set(file_path)
+            # パスの正規化と絶対パス化
+            normalized_path = os.path.normpath(file_path)
+            abs_path = os.path.abspath(normalized_path)
+
+            logger.debug(f"選択されたパス: {file_path}")
+            logger.debug(f"正規化後: {normalized_path}")
+            logger.debug(f"絶対パス: {abs_path}")
+
+            self.voicevox_path.set(abs_path)
+
+            # VOICEVOXマネージャーのパスも更新
+            if hasattr(self, 'voicevox_manager'):
+                self.voicevox_manager.engine_path = abs_path
+
+            # 選択されたファイルを検証
+            if os.path.exists(abs_path):
+                # ファイル名のチェック
+                file_name = os.path.basename(abs_path)
+                if file_name.lower() == "run.exe":
+                    self.log_message(f"✅ VOICEVOX Engineパスを設定しました: {abs_path}")
+                else:
+                    self.log_message(f"⚠️ 警告: ファイル名が run.exe ではありません: {file_name}")
+                    self.log_message(f"設定されたパス: {abs_path}")
+                    self.log_message("正しいファイルを選択しているか確認してください")
+
+                # ドライブレターの確認（デバッグ用）
+                if platform.system() == "Windows":
+                    drive = os.path.splitdrive(abs_path)[0]
+                    self.log_message(f"ドライブ: {drive if drive else 'なし'}")
+
+            else:
+                self.log_message(f"❌ 選択されたファイルが見つかりません: {abs_path}")
+                self.log_message(f"元のパス: {file_path}")
 
     def _setup_auto_save(self):
         """設定変更を自動保存するためのトレースを設定"""
@@ -2073,21 +2461,38 @@ window.onload = function() {{
             self.log_message("✅ VOICEVOX Engine の起動に成功しました")
             self._start_tts()
         else:
-            self.log_message("⚠️ VOICEVOX Engine の起動に失敗しました。pyttsx3で代替します。")
+            voicevox_path = self.voicevox_path.get().strip()
+            if not voicevox_path:
+                self.log_message("⚠️ VOICEVOX Engineのパスが設定されていません")
+                self.log_message("💡 設定タブで「参照...」ボタンから run.exe を選択してください")
+            elif not os.path.exists(os.path.abspath(voicevox_path)):
+                self.log_message(f"❌ VOICEVOX Engineが見つかりません: {voicevox_path}")
+                self.log_message("💡 設定タブで正しいパスを設定してください（参照ボタン推奨）")
+            else:
+                self.log_message("⚠️ VOICEVOX Engine の起動に失敗しました")
+                self.log_message("💡 手動でVOICEVOXを起動するか、pyttsx3で代替できます")
+
+            self.log_message("🔄 フォールバックTTS（pyttsx3）で続行します")
             self._start_tts()
 
     def _start_tts(self):
         """TTS機能を開始"""
+        logger.info("_start_tts() が呼ばれました")
+        self.log_message("🔊 読み上げエンジンを起動しています...")
+
         success = self.tts.start()
         if not success:
             self.tts_started = False
             self.log_message("❌ TTSエンジンの起動に失敗しました (pygame/pyttsx3が必要です)")
+            logger.error("TTS起動失敗")
         else:
             # Show which engine is being used
             if self.tts.engine_mode == 'voicevox':
                 self.log_message("✅ VOICEVOX (冥鳴ひまり) で読み上げを開始しました")
+                logger.info("TTS起動成功: VOICEVOX")
             elif self.tts.engine_mode == 'pyttsx3':
                 self.log_message("✅ pyttsx3フォールバックエンジンで読み上げを開始しました (VOICEVOXが利用不可)")
+                logger.info("TTS起動成功: pyttsx3")
 
     def build_dictionary_tab(self):
         """読み上げ辞書タブの構築"""

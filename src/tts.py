@@ -541,20 +541,34 @@ class VoicevoxTTS:
 
     def start(self):
         """Start TTS service"""
+        logger.info("=== TTS起動プロセス開始 ===")
+        logger.info(f"VOICEVOX可用性: {self.voicevox_available}")
+        logger.info(f"pygame imported: {PYGAME_IMPORTED}")
+        logger.info(f"pyttsx3 available: {PYTTSX3_AVAILABLE}")
+
         engine_mode = None
 
         # Prefer VOICEVOX if available and pygame audio can be initialized safely
-        if self.voicevox_available and _init_pygame_audio():
-            engine_mode = 'voicevox'
-            logger.info("Starting TTS with VOICEVOX engine")
+        if self.voicevox_available:
+            logger.info("VOICEVOXが利用可能です。pygameオーディオを初期化しています...")
+            pygame_ready = _init_pygame_audio()
+            logger.info(f"pygameオーディオ初期化結果: {pygame_ready}")
+
+            if pygame_ready:
+                engine_mode = 'voicevox'
+                logger.info("✅ TTSエンジンをVOICEVOXで起動します")
+            else:
+                logger.warning("⚠️ pygameオーディオの初期化に失敗しました。pyttsx3にフォールバックします。")
+        else:
+            logger.warning(f"⚠️ VOICEVOX APIに接続できません（URL: {self.api_url}）")
 
         # Fallback to pyttsx3 if VOICEVOX/pygame is not available
         if engine_mode is None and PYTTSX3_AVAILABLE:
             engine_mode = 'pyttsx3'
-            logger.info("Starting TTS with pyttsx3 fallback engine")
+            logger.info("✅ TTSエンジンをpyttsx3で起動します（フォールバック）")
 
         if engine_mode is None:
-            logger.error("Cannot start TTS: No available engine (VOICEVOX unreachable and pyttsx3 missing)")
+            logger.error("❌ TTSエンジンを起動できません: VOICEVOXが利用不可、pyttsx3も見つかりません")
             return False
 
         self.engine_mode = engine_mode
@@ -565,13 +579,16 @@ class VoicevoxTTS:
         if self.synthesis_thread is None or not self.synthesis_thread.is_alive():
             self.synthesis_thread = threading.Thread(target=self._synthesis_worker, daemon=True)
             self.synthesis_thread.start()
+            logger.info("合成ワーカースレッドを起動しました")
 
         # Start playback worker thread (only needed for VOICEVOX/pygame playback)
         if self.engine_mode == 'voicevox' and (self.playback_thread is None or not self.playback_thread.is_alive()):
             self.playback_thread = threading.Thread(target=self._playback_worker, daemon=True)
             self.playback_thread.start()
+            logger.info("再生ワーカースレッドを起動しました")
 
-        logger.info(f"TTS service started with {self.engine_mode} engine")
+        logger.info(f"✅ TTSサービスが{self.engine_mode}エンジンで起動しました")
+        logger.info("=== TTS起動プロセス完了 ===")
         return True
 
     def stop(self):
@@ -596,14 +613,17 @@ class VoicevoxTTS:
             force: Force speak even if TTS is disabled
         """
         if not self.enabled and not force:
+            logger.warning(f"⚠️ TTSが無効です。読み上げをスキップします: {text[:50]}...")
             return
 
         # Clean text
         cleaned_text = clean_text_for_tts(text)
         if not cleaned_text:
+            logger.debug(f"クリーニング後のテキストが空です: {text[:50]}...")
             return
 
-        logger.debug(f"Queuing for TTS: {cleaned_text}")
+        logger.info(f"🔊 TTSキューに追加: {cleaned_text}")
+        logger.debug(f"エンジンモード: {self.engine_mode}, キューサイズ: {self.synthesis_queue.qsize()}")
 
         # Add to synthesis queue (non-blocking)
         self.synthesis_queue.put(cleaned_text)

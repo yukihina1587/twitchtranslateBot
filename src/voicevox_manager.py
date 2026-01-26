@@ -53,9 +53,40 @@ class VoicevoxEngineManager:
             return True
 
         # 実行ファイルパスが設定されていない場合
-        if not self.engine_path or not os.path.exists(self.engine_path):
-            logger.warning(f"VOICEVOX Engine path not configured or not found: {self.engine_path}")
+        if not self.engine_path:
+            logger.error("❌ VOICEVOX Engine path is not configured")
+            logger.error("設定タブで「VOICEVOX Engineパス」を正しく設定してください")
             return False
+
+        # パスの正規化と絶対パス化
+        # os.path.normpath: スラッシュを正規化、余分な区切り文字を削除
+        # os.path.abspath: 絶対パスに変換
+        normalized_path = os.path.normpath(self.engine_path)
+        abs_path = os.path.abspath(normalized_path)
+
+        logger.debug(f"パス正規化: {self.engine_path} → {normalized_path} → {abs_path}")
+
+        # ファイルが存在しない場合
+        if not os.path.exists(abs_path):
+            logger.error(f"❌ VOICEVOX Engine executable not found at: {abs_path}")
+            logger.error(f"設定されたパス: {self.engine_path}")
+            logger.error(f"正規化後: {normalized_path}")
+
+            # パス形式のヒント
+            if platform.system() == "Windows":
+                logger.error("正しい形式の例: C:\\Program Files\\VOICEVOX\\run.exe または E:\\VOICEVOX\\run.exe")
+
+            logger.error("「参照...」ボタンを使って正しい実行ファイル（run.exe）を選択してください")
+            return False
+
+        # ファイルタイプの検証（Windowsの場合）
+        if platform.system() == "Windows" and not abs_path.lower().endswith('.exe'):
+            logger.warning(f"⚠️ ファイルが .exe で終わっていません: {abs_path}")
+            logger.warning("正しいファイルを選択しているか確認してください")
+
+        # パスを絶対パスに更新
+        self.engine_path = abs_path
+        logger.info(f"VOICEVOX Engine パス確定: {abs_path}")
 
         try:
             logger.info(f"Starting VOICEVOX Engine: {self.engine_path}")
