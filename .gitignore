@@ -13,3 +13,15 @@ __pycache__/
 ngrok.exe
 *.spec
 !Kototsuna.spec
+
+# IDE / Editor
+.cursor/
+.idea/
+
+# Claude Code / MCP
+.claude.json
+.mcp.json
+
+# Unused
+PENCIL_SETUP.md
+designs/
