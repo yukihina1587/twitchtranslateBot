@@ -10,6 +10,7 @@ import threading
 import queue
 import tempfile
 import os
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 from typing import Optional, Tuple
 from src.logger import logger
 
@@ -189,36 +190,41 @@ class VoicevoxTTS:
         """Check if VOICEVOX API is available (synchronous for init)"""
         try:
             import requests
-            logger.debug(f"Checking VOICEVOX API at {self.api_url}/speakers")
-            response = requests.get(f"{self.api_url}/speakers", timeout=3)
+            logger.debug(f"Checking VOICEVOX API at {self.api_url}/version")
+            response = requests.get(f"{self.api_url}/version", timeout=2)
             if response.status_code == 200:
                 logger.info(f"VOICEVOX API is available at {self.api_url}")
-                speakers = response.json()
-                speaker_found = False
-                for speaker in speakers:
-                    for style in speaker.get('styles', []):
-                        if style.get('id') == self.speaker_id:
-                            speaker_found = True
-                            logger.info(f"Found speaker: {speaker['name']} - {style['name']} (ID: {self.speaker_id})")
-                            break
-                if not speaker_found:
-                    logger.warning(f"Speaker ID {self.speaker_id} not found in VOICEVOX")
+                # スピーカー情報を別途取得
+                self._log_speaker_info()
                 return True
-            else:
-                logger.warning(f"VOICEVOX API returned status {response.status_code}")
-                return False
+            return False
         except Exception as e:
             logger.debug(f"VOICEVOX not available: {e}")
             return False
+
+    def _log_speaker_info(self):
+        """Log speaker information (called once at init)"""
+        try:
+            import requests
+            response = requests.get(f"{self.api_url}/speakers", timeout=3)
+            if response.status_code == 200:
+                speakers = response.json()
+                for speaker in speakers:
+                    for style in speaker.get('styles', []):
+                        if style.get('id') == self.speaker_id:
+                            logger.info(f"Found speaker: {speaker['name']} - {style['name']} (ID: {self.speaker_id})")
+                            return
+                logger.warning(f"Speaker ID {self.speaker_id} not found")
+        except Exception as e:
+            logger.debug(f"Failed to get speaker info: {e}")
 
     async def _check_voicevox_availability_async(self):
         """Check if VOICEVOX API is available (async)"""
         try:
             if self.aio_session is None:
                 return False
-
             async with self.aio_session.get(
-                f"{self.api_url}/speakers",
+                f"{self.api_url}/version",
                 timeout=aiohttp.ClientTimeout(total=2)
             ) as response:
                 return response.status == 200
@@ -251,12 +257,13 @@ class VoicevoxTTS:
                 except Exception as e:
                     logger.error(f"Failed to create aiohttp session: {e}")
 
-    async def _synthesize_voicevox_async(self, text: str) -> Optional[bytes]:
+    async def _synthesize_voicevox_async(self, text: str, retry: bool = True) -> Optional[bytes]:
         """
         Synthesize speech from text using VOICEVOX API (async)
 
         Args:
             text: Text to synthesize
+            retry: Whether to retry on failure (default: True)
 
         Returns:
             WAV audio data as bytes, or None if failed
@@ -273,6 +280,10 @@ class VoicevoxTTS:
             ) as response:
                 if response.status != 200:
                     logger.error(f"Failed to create audio query: {response.status}")
+                    if retry:
+                        logger.info("Retrying VOICEVOX synthesis...")
+                        await asyncio.sleep(0.5)
+                        return await self._synthesize_voicevox_async(text, retry=False)
                     return None
                 audio_query = await response.json()
 
@@ -286,14 +297,26 @@ class VoicevoxTTS:
             ) as response:
                 if response.status != 200:
                     logger.error(f"Failed to synthesize speech: {response.status}")
+                    if retry:
+                        logger.info("Retrying VOICEVOX synthesis...")
+                        await asyncio.sleep(0.5)
+                        return await self._synthesize_voicevox_async(text, retry=False)
                     return None
                 return await response.read()
 
         except asyncio.TimeoutError:
             logger.warning(f"VOICEVOX synthesis timeout for: {text}")
+            if retry:
+                logger.info("Retrying VOICEVOX synthesis after timeout...")
+                await asyncio.sleep(0.5)
+                return await self._synthesize_voicevox_async(text, retry=False)
             return None
         except Exception as e:
             logger.error(f"Error during VOICEVOX synthesis: {e}")
+            if retry:
+                logger.info("Retrying VOICEVOX synthesis after error...")
+                await asyncio.sleep(0.5)
+                return await self._synthesize_voicevox_async(text, retry=False)
             return None
 
     def _synthesize_pyttsx3(self, text: str) -> Optional[bytes]:
@@ -407,6 +430,7 @@ class VoicevoxTTS:
             logger.warning("pygame not available, cannot play audio")
             return
 
+        temp_path = None
         try:
             # Create temporary file for audio data
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
@@ -421,14 +445,19 @@ class VoicevoxTTS:
             while pygame.mixer.music.get_busy():
                 pygame.time.Clock().tick(10)
 
-            # Clean up temporary file
-            try:
-                os.unlink(temp_path)
-            except Exception:
-                pass
-
+        except pygame.error as e:
+            logger.error(f"Pygame error during audio playback: {e}", exc_info=True)
+        except IOError as e:
+            logger.error(f"IO error during audio playback: {e}", exc_info=True)
         except Exception as e:
-            logger.error(f"Error playing audio: {e}", exc_info=True)
+            logger.error(f"Unexpected error playing audio: {e}", exc_info=True)
+        finally:
+            # Clean up temporary file
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except Exception:
+                    pass
 
     def _synthesis_worker(self):
         """Background worker thread for synthesizing audio"""
@@ -537,7 +566,25 @@ class VoicevoxTTS:
                 continue
             except Exception as e:
                 logger.error(f"Error in playback worker: {e}", exc_info=True)
+                # task_done を呼び出してキューがブロックされないようにする
+                try:
+                    self.play_queue.task_done()
+                except ValueError:
+                    pass  # task_done が既に呼ばれた場合
         logger.info("TTS playback worker stopped")
+
+    def _ensure_workers_running(self):
+        """ワーカースレッドが動作しているか確認し、停止していたら再起動"""
+        if self.synthesis_thread is None or not self.synthesis_thread.is_alive():
+            logger.warning("Synthesis worker was dead, restarting...")
+            self.synthesis_thread = threading.Thread(target=self._synthesis_worker, daemon=True)
+            self.synthesis_thread.start()
+
+        if self.engine_mode == 'voicevox':
+            if self.playback_thread is None or not self.playback_thread.is_alive():
+                logger.warning("Playback worker was dead, restarting...")
+                self.playback_thread = threading.Thread(target=self._playback_worker, daemon=True)
+                self.playback_thread.start()
 
     def start(self):
         """Start TTS service"""
@@ -615,6 +662,9 @@ class VoicevoxTTS:
         if not self.enabled and not force:
             logger.warning(f"⚠️ TTSが無効です。読み上げをスキップします: {text[:50]}...")
             return
+
+        # ワーカースレッドが動作しているか確認し、停止していたら再起動
+        self._ensure_workers_running()
 
         # Clean text
         cleaned_text = clean_text_for_tts(text)

@@ -25,6 +25,7 @@ hiddenimports += collect_submodules('src')
 # アイコンファイルを含める（PNGとICOの両方）
 datas += [('assets/icon.png', 'assets'), ('assets/icon_fullsize.ico', 'assets')]
 datas += [('src', 'src')] # srcフォルダごとデータとしてコピーもしておく（念のため）
+datas += [('overlay.html', '.')]  # オーバーレイHTML
 
 
 a = Analysis(

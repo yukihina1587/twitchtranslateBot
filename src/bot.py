@@ -5,6 +5,7 @@ from src.logger import logger
 from src.tts import get_tts_instance, is_japanese
 from src.participant_tracker import get_tracker
 from src.comment_data import create_twitch_comment
+from src.config import load_config
 
 class TranslateBot(commands.Bot):
     def __init__(self, token, channel, get_lang_mode, gui_ref, deepl_api_key, tts_enabled_getter=None, tts_include_name_getter=None):
@@ -102,6 +103,33 @@ class TranslateBot(commands.Bot):
             return
 
         # ここから通常の翻訳処理
+        # チャット翻訳が無効の場合は翻訳をスキップ
+        config = load_config()
+        if not config.get("chat_translation_enabled", True):
+            # 翻訳せずに原文のみ表示
+            comment = create_twitch_comment(
+                username=message.author.name,
+                message=message.content,
+                tags=message.tags,
+                display_name=message.author.display_name if hasattr(message.author, 'display_name') else message.author.name,
+                translated=None
+            )
+            self.gui.on_comment_received(comment)
+
+            # TTS: チャット読み上げ（翻訳無効時も原文を読み上げる）
+            if self.tts_enabled_getter():
+                speak_text = message.content
+                if self.tts_include_name_getter():
+                    display_name = message.author.display_name if hasattr(message.author, 'display_name') else message.author.name
+                    speak_text = f"{display_name}さん、{speak_text}"
+                if speak_text and speak_text.strip():
+                    try:
+                        self.tts.speak(speak_text)
+                        logger.debug(f"TTS speak called (no translation): {speak_text[:30]}...")
+                    except Exception as e:
+                        logger.error(f"TTS speak error: {e}", exc_info=True)
+            return
+
         lang_mode = self.get_lang_mode()
         translated = await translate_text(content, lang_mode, self.deepl_api_key)
 

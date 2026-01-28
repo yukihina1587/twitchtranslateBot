@@ -9,6 +9,7 @@ import shutil
 import json
 import platform
 import os
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 from datetime import datetime
 from typing import Dict
 
@@ -87,8 +88,8 @@ THEMES = {
         "ACCENT_SECONDARY": "#FF00FF",  # ネオンマゼンタ
         "ACCENT_WARN": "#FFFF00",  # ネオンイエロー
         "TEXT_PRIMARY": "#00FFFF",
-        "TEXT_SUBTLE": "#00FFFF80",
-        "SHADOW": "#00FFFF40",
+        "TEXT_SUBTLE": "#008080",  # ダークシアン（半透明の代替）
+        "SHADOW": "#004040",  # ダークシアン（半透明の代替）
         "GLOW": True,  # グロー効果強め
     },
     "default": {  # 現在のデフォルトテーマ（既存）
@@ -121,6 +122,7 @@ ACCENT = THEMES[CURRENT_THEME]["ACCENT"]
 ACCENT_SECONDARY = THEMES[CURRENT_THEME]["ACCENT_SECONDARY"]
 ACCENT_WARN = THEMES[CURRENT_THEME]["ACCENT_WARN"]
 TEXT_SUBTLE = THEMES[CURRENT_THEME]["TEXT_SUBTLE"]
+BUTTON_CORNER_RADIUS = THEMES[CURRENT_THEME].get("BUTTON_CORNER_RADIUS", 10)
 FONT_TITLE = ("Segoe UI Semibold", 18)
 FONT_SUBTITLE = ("Segoe UI", 13)
 FONT_LABEL = ("Segoe UI Semibold", 12)
@@ -168,6 +170,7 @@ class TwitchBotApp:
         # Variables
         self.channel = tk.StringVar(value=self.config.get("channel_name", ""))
         self.lang_mode = tk.StringVar(value=self.config.get("translate_mode", "自動"))
+        self.chat_translation_enabled = tk.BooleanVar(value=self.config.get("chat_translation_enabled", True))
         self.client_id = tk.StringVar(value=self.config.get("twitch_client_id", ""))
         self.deepl_key = tk.StringVar(value=self.config.get("deepl_api_key", ""))
         self.gladia_key = tk.StringVar(value=self.config.get("gladia_api_key", ""))
@@ -238,6 +241,7 @@ class TwitchBotApp:
         """
         global CURRENT_THEME, APP_BG, CARD_BG, PANEL_BG, BORDER
         global ACCENT, ACCENT_SECONDARY, ACCENT_WARN, TEXT_SUBTLE
+        global BUTTON_CORNER_RADIUS
 
         if theme_name not in THEMES:
             logger.warning(f"Unknown theme: {theme_name}, falling back to default")
@@ -255,6 +259,7 @@ class TwitchBotApp:
         ACCENT_SECONDARY = theme["ACCENT_SECONDARY"]
         ACCENT_WARN = theme["ACCENT_WARN"]
         TEXT_SUBTLE = theme["TEXT_SUBTLE"]
+        BUTTON_CORNER_RADIUS = theme.get("BUTTON_CORNER_RADIUS", 10)
 
         # ライトモード/ダークモードの切り替え
         if theme_name == "minimal":
@@ -344,7 +349,7 @@ class TwitchBotApp:
         action_bar = ctk.CTkFrame(hero, fg_color="transparent")
         action_bar.grid(row=0, column=2, rowspan=2, sticky="e", padx=16, pady=10)
         action_bar.grid_columnconfigure(0, weight=1)
-        button_opts = {"font": ("Segoe UI Semibold", 13), "height": 40, "width": 160, "corner_radius": 10}
+        button_opts = {"font": ("Segoe UI Semibold", 13), "height": 40, "width": 160, "corner_radius": BUTTON_CORNER_RADIUS}
         ctk.CTkButton(action_bar, text="① トークン認証", command=self.start_auth, fg_color=ACCENT_SECONDARY, hover_color="#1EA4D8", text_color="#0B1220", **button_opts).grid(row=0, column=0, sticky="ew", pady=3)
         ctk.CTkButton(action_bar, text="② BOT起動", command=self.start_bot, fg_color=ACCENT, hover_color="#16A34A", text_color="#0B1220", **button_opts).grid(row=1, column=0, sticky="ew", pady=3)
         ctk.CTkButton(action_bar, text="③ BOT停止", command=self.stop_bot, fg_color="#EF4444", hover_color="#DC2626", text_color="#FFFFFF", **button_opts).grid(row=2, column=0, sticky="ew", pady=3)
@@ -366,6 +371,19 @@ class TwitchBotApp:
         ctk.CTkEntry(card_connect, textvariable=self.channel, placeholder_text="配信チャンネル名", height=34).grid(row=1, column=1, sticky="ew", padx=(0, 14), pady=6)
         ctk.CTkLabel(card_connect, text="翻訳モード", font=FONT_SUBTITLE, text_color=TEXT_SUBTLE).grid(row=2, column=0, sticky="e", padx=12, pady=6)
         ctk.CTkOptionMenu(card_connect, variable=self.lang_mode, values=['自動', '英→日', '日→英'], height=34, fg_color=PANEL_BG, button_color=ACCENT_SECONDARY, button_hover_color="#1EA4D8").grid(row=2, column=1, sticky="w", padx=(0, 14), pady=6)
+        # チャット翻訳有効/無効トグル
+        ctk.CTkLabel(card_connect, text="チャット翻訳", font=FONT_SUBTITLE, text_color=TEXT_SUBTLE).grid(row=3, column=0, sticky="e", padx=12, pady=6)
+        self.translation_toggle = ctk.CTkSwitch(
+            card_connect,
+            text="有効",
+            variable=self.chat_translation_enabled,
+            command=self._on_translation_toggle_changed,
+            onvalue=True,
+            offvalue=False,
+            font=FONT_BODY
+        )
+        self.translation_toggle.pack_forget()  # gridで配置するため
+        self.translation_toggle.grid(row=3, column=1, sticky="w", padx=(0, 14), pady=6)
 
         # 音声/読み上げカード
         card_voice = ctk.CTkFrame(controls, fg_color=CARD_BG, corner_radius=14, border_width=1, border_color=BORDER)
@@ -2428,6 +2446,14 @@ window.onload = function() {{
             self.voice_translator.stop()
             self.log_message("mic 音声認識を停止しました")
             self._set_status("音声翻訳を停止しました。", "info")
+
+    def _on_translation_toggle_changed(self):
+        """チャット翻訳トグルが変更されたとき"""
+        enabled = self.chat_translation_enabled.get()
+        self.config["chat_translation_enabled"] = enabled
+        save_config(self.config)
+        status = "有効" if enabled else "無効"
+        self.log_message(f"チャット翻訳を{status}にしました")
 
     def _ensure_tts_started(self):
         """チャット読み上げを常時ONにするための起動ヘルパー"""

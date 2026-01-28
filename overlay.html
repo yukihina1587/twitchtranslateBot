@@ -1,113 +1,134 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="ja" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Translation Overlay</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            background: '#09090b',
+            foreground: '#fafafa',
+            card: {
+              DEFAULT: '#09090b',
+              foreground: '#fafafa'
+            },
+            muted: {
+              DEFAULT: '#27272a',
+              foreground: '#a1a1aa'
+            },
+            border: '#27272a',
+            ring: '#d4d4d8'
+          },
+          borderRadius: {
+            lg: '8px',
+            md: '6px',
+            sm: '4px'
+          }
+        }
+      }
+    }
+  </script>
   <style>
-    :root {
-      --bg1: #0b1220;
-      --bg2: #12203a;
-      --card: #111c30cc;
-      --accent: #22c55e;
-      --text: #e8f0ff;
-      --subtext: #9fb3d1;
-    }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
     body {
-      margin: 0;
-      padding: 0;
-      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: radial-gradient(circle at 20% 20%, #1f2d4d, #0b1220 50%), radial-gradient(circle at 80% 0%, #123b64, transparent 40%), #0b1220;
-      color: var(--text);
-      overflow: hidden;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background-color: #09090b;
     }
-    .overlay {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      padding: 16px;
-    }
-    .card {
-      background: var(--card);
-      border: 1px solid #1f2c43;
-      border-radius: 14px;
-      box-shadow: 0 12px 40px rgba(0,0,0,0.35);
-      padding: 14px 16px;
-      backdrop-filter: blur(10px);
-    }
-    .current {
-      font-size: 28px;
-      line-height: 1.3;
-      font-weight: 700;
-      animation: fadeIn 0.6s ease, slideUp 0.5s ease;
-    }
-    .history {
-      display: grid;
-      gap: 6px;
-      font-size: 16px;
-      color: var(--subtext);
-    }
-    .pill {
-      display: inline-block;
-      background: #1b2a46cc;
-      border-radius: 999px;
-      padding: 6px 10px;
-      font-size: 12px;
-      color: var(--subtext);
-      border: 1px solid #1f2c43;
-    }
-    .row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
+
     @keyframes fadeIn {
       from { opacity: 0; }
       to { opacity: 1; }
     }
+
     @keyframes slideUp {
-      from { transform: translateY(8px); }
-      to { transform: translateY(0); }
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .animate-fade-in {
+      animation: fadeIn 0.4s ease-out;
+    }
+
+    .animate-slide-up {
+      animation: slideUp 0.5s ease-out;
     }
   </style>
 </head>
-<body>
-  <div class="overlay">
-    <div class="card">
-      <div class="row">
-        <span class="pill">Now</span>
-        <span id="id-pill" class="pill">#0</span>
+<body class="min-h-screen bg-background text-foreground p-4">
+  <div class="flex flex-col gap-4 max-w-4xl mx-auto">
+    <!-- Current Translation Card -->
+    <div class="rounded-lg border border-border bg-card p-6 shadow-sm">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="inline-flex items-center rounded-md bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+          Now
+        </span>
+        <span id="id-pill" class="inline-flex items-center rounded-md bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+          #0
+        </span>
       </div>
-      <div id="current-text" class="current">Loading...</div>
+      <p id="current-text" class="text-2xl font-semibold leading-relaxed tracking-tight text-card-foreground animate-slide-up">
+        Loading...
+      </p>
     </div>
-    <div class="card">
-      <div class="row">
-        <span class="pill">History</span>
+
+    <!-- History Card -->
+    <div class="rounded-lg border border-border bg-card p-6 shadow-sm">
+      <div class="flex items-center gap-2 mb-4">
+        <span class="inline-flex items-center rounded-md bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+          History
+        </span>
       </div>
-      <div id="history" class="history"></div>
+      <div id="history" class="space-y-2 text-sm text-muted-foreground">
+        <!-- History items will be inserted here -->
+      </div>
     </div>
   </div>
+
   <script>
     async function fetchJson(url) {
       const res = await fetch(url);
       return res.json();
     }
 
+    let lastId = -1;
+
     async function refresh() {
       try {
         const current = await fetchJson('/api/current');
-        document.getElementById('current-text').textContent = current.text || '';
-        document.getElementById('id-pill').textContent = `#${current.id}`;
+        const currentTextEl = document.getElementById('current-text');
+        const idPill = document.getElementById('id-pill');
+
+        if (current.id !== lastId) {
+          currentTextEl.textContent = current.text || '';
+          currentTextEl.classList.remove('animate-slide-up');
+          void currentTextEl.offsetWidth; // Trigger reflow
+          currentTextEl.classList.add('animate-slide-up');
+          lastId = current.id;
+        }
+
+        idPill.textContent = `#${current.id}`;
 
         const hist = await fetchJson('/api/history');
         const historyEl = document.getElementById('history');
         historyEl.innerHTML = '';
+
         hist.slice().reverse().forEach((t, idx) => {
           const div = document.createElement('div');
+          div.className = 'py-2 px-3 rounded-md bg-muted/50 border border-border/50 animate-fade-in';
+          div.style.animationDelay = `${idx * 50}ms`;
           div.textContent = t;
-          div.style.animation = `fadeIn 0.4s ease ${idx * 0.05}s both`;
           historyEl.appendChild(div);
         });
       } catch (e) {
@@ -115,6 +136,7 @@
       }
       setTimeout(refresh, 1200);
     }
+
     refresh();
   </script>
 </body>

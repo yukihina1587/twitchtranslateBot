@@ -1,14 +1,35 @@
 """
 Logging configuration for TwitchTranslateBOT
-Provides centralized logging setup with file and console handlers.
+Provides centralized logging setup with daily rotating file handler.
 """
 import logging
-import os
-from logging.handlers import RotatingFileHandler
+import sys
+from pathlib import Path
+from datetime import datetime
+from logging.handlers import TimedRotatingFileHandler
+
+
+def _get_log_directory() -> Path:
+    """
+    Get the appropriate log directory based on execution context.
+
+    Returns:
+        Path to the log directory
+    """
+    if getattr(sys, 'frozen', False):
+        # Running as exe (PyInstaller)
+        base_dir = Path(sys.executable).parent
+    else:
+        # Running as script (development)
+        base_dir = Path(__file__).parent.parent / "dist"
+
+    return base_dir / "logs"
+
 
 def setup_logger(name: str = "TwitchTranslateBOT", level: str = "INFO") -> logging.Logger:
     """
-    Setup and configure logger with both file and console handlers.
+    Setup and configure logger with daily rotating file handler.
+    Console output is disabled - all logs go to file only.
 
     Args:
         name: Logger name
@@ -25,40 +46,39 @@ def setup_logger(name: str = "TwitchTranslateBOT", level: str = "INFO") -> loggi
 
     # Set logging level
     log_level = getattr(logging, level.upper(), logging.INFO)
-    logger.setLevel(log_level)
+    logger.setLevel(logging.DEBUG)  # Logger itself captures all levels
 
     # Create logs directory if it doesn't exist
-    log_dir = "logs"
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
+    log_dir = _get_log_directory()
+    log_dir.mkdir(parents=True, exist_ok=True)
 
-    # File handler with rotation (max 5MB, keep 3 backup files)
-    file_handler = RotatingFileHandler(
-        os.path.join(log_dir, "bot.log"),
-        maxBytes=5*1024*1024,
-        backupCount=3,
+    # Daily rotating file handler
+    # File format: bot_YYYY-MM-DD.log
+    today = datetime.now().strftime("%Y-%m-%d")
+    log_file = log_dir / f"bot_{today}.log"
+
+    file_handler = TimedRotatingFileHandler(
+        log_file,
+        when='midnight',      # Rotate at midnight
+        interval=1,           # Every 1 day
+        backupCount=7,        # Keep 7 days of logs
         encoding='utf-8'
     )
+    # Set suffix for rotated files (e.g., bot_2026-01-28.log.2026-01-27)
+    file_handler.suffix = "%Y-%m-%d"
     file_handler.setLevel(logging.DEBUG)
+
     file_formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s',
+        '%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     file_handler.setFormatter(file_formatter)
 
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(log_level)
-    console_formatter = logging.Formatter(
-        '%(levelname)s - %(message)s'
-    )
-    console_handler.setFormatter(console_formatter)
-
-    # Add handlers to logger
+    # Add only file handler (no console output)
     logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
 
     return logger
+
 
 # Create default logger instance
 logger = setup_logger()

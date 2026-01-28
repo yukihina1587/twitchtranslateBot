@@ -1,6 +1,7 @@
 import sys
 import io
 import os
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 import tkinter as tk
 from dotenv import load_dotenv
 
@@ -9,6 +10,9 @@ BASE_DIR = getattr(sys, "_MEIPASS", os.path.abspath(os.path.dirname(__file__)))
 SRC_DIR = os.path.join(BASE_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
+
+# ロガーを最初にインポート（他のモジュールより先に初期化）
+from src.logger import logger  # noqa: E402
 
 import customtkinter as ctk  # noqa: E402
 import src.overlay_server  # noqa: E402
@@ -60,7 +64,7 @@ def create_splash_screen():
             icon_label.image = icon_image  # type: ignore[attr-defined]  # 参照を保持
             icon_label.pack(pady=40)
     except Exception as e:
-        print(f"スプラッシュスクリーンのアイコン読み込みエラー: {e}")
+        logger.warning(f"スプラッシュスクリーンのアイコン読み込みエラー: {e}")
 
     # ローディングテキスト
     loading_label = tk.Label(
@@ -91,7 +95,7 @@ def on_closing():
         # アプリケーションのリソースを解放
         app.cleanup_resources()
     except Exception as e:
-        print(f"Error during cleanup: {e}")
+        logger.error(f"クリーンアップ中のエラー: {e}", exc_info=True)
     finally:
         # ウィンドウを破棄
         root.destroy()
@@ -116,7 +120,7 @@ if __name__ == '__main__':
             # メインウィンドウを表示
             root.deiconify()
         except Exception as e:
-            print(f"アプリケーション初期化エラー: {e}")
+            logger.critical(f"アプリケーション初期化エラー: {e}", exc_info=True)
             splash.destroy()
             root.destroy()
 
