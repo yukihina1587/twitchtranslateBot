@@ -218,6 +218,48 @@ class VoicevoxTTS:
         except Exception as e:
             logger.debug(f"Failed to get speaker info: {e}")
 
+    def get_speakers_list(self) -> list:
+        """
+        VOICEVOX APIから利用可能なスピーカー一覧を取得
+        Returns: List of dicts with 'name', 'style', 'id' keys
+                 e.g. [{'name': '冥鳴ひまり', 'style': 'ノーマル', 'id': 14, 'display': '冥鳴ひまり / ノーマル'}, ...]
+        """
+        try:
+            import requests
+            response = requests.get(f"{self.api_url}/speakers", timeout=5)
+            if response.status_code == 200:
+                speakers = response.json()
+                result = []
+                for speaker in speakers:
+                    name = speaker.get('name', 'Unknown')
+                    for style in speaker.get('styles', []):
+                        style_name = style.get('name', 'Default')
+                        style_id = style.get('id', 0)
+                        result.append({
+                            'name': name,
+                            'style': style_name,
+                            'id': style_id,
+                            'display': f"{name} / {style_name}"
+                        })
+                return result
+        except Exception as e:
+            logger.error(f"スピーカー一覧取得エラー: {e}")
+        return []
+
+    def set_speaker(self, speaker_id: int):
+        """スピーカーIDを変更"""
+        self.speaker_id = speaker_id
+        logger.info(f"VOICEVOX speaker changed to ID: {speaker_id}")
+
+    def test_voice(self, text: str = "これはテスト音声です") -> bool:
+        """テスト音声を再生"""
+        try:
+            self.speak(text)
+            return True
+        except Exception as e:
+            logger.error(f"テスト音声再生エラー: {e}")
+            return False
+
     async def _check_voicevox_availability_async(self):
         """Check if VOICEVOX API is available (async)"""
         try:
@@ -677,6 +719,44 @@ class VoicevoxTTS:
 
         # Add to synthesis queue (non-blocking)
         self.synthesis_queue.put(cleaned_text)
+
+    def set_speaker(self, speaker_id: int):
+        """スピーカーIDを変更"""
+        self.speaker_id = speaker_id
+        logger.info(f"VOICEVOX speaker changed to ID: {speaker_id}")
+
+    def get_speakers_list(self) -> list:
+        """
+        VOICEVOXから利用可能なスピーカー一覧を取得
+
+        Returns:
+            List of dicts: [{'name': '...', 'style': '...', 'id': N, 'display': '...'}]
+        """
+        try:
+            import requests
+            response = requests.get(f"{self.api_url}/speakers", timeout=5)
+            if response.status_code != 200:
+                logger.warning(f"スピーカー一覧取得失敗: {response.status_code}")
+                return []
+
+            speakers = response.json()
+            result = []
+            for speaker in speakers:
+                name = speaker.get('name', 'Unknown')
+                for style in speaker.get('styles', []):
+                    style_name = style.get('name', 'ノーマル')
+                    style_id = style.get('id', 0)
+                    result.append({
+                        'name': name,
+                        'style': style_name,
+                        'id': style_id,
+                        'display': f"{name} / {style_name}"
+                    })
+            logger.info(f"取得したスピーカー数: {len(result)}")
+            return result
+        except Exception as e:
+            logger.error(f"スピーカー一覧取得エラー: {e}")
+            return []
 
 
 # Global TTS instance

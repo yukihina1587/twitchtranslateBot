@@ -176,8 +176,13 @@ class TwitchBotApp:
         self.gladia_key = tk.StringVar(value=self.config.get("gladia_api_key", ""))
         self.voicevox_path = tk.StringVar(value=self.config.get("voicevox_engine_path", ""))
         self.voicevox_auto_start = tk.BooleanVar(value=self.config.get("voicevox_auto_start", True))
+        self.voicevox_speaker_id = tk.IntVar(value=self.config.get("voicevox_speaker_id", 14))
+        self.voicevox_speaker_name = tk.StringVar(value=self.config.get("voicevox_speaker_name", "冥鳴ひまり / ノーマル"))
+        self.voicevox_speakers_cache = []  # スピーカー一覧キャッシュ
         self.bits_sound_path = tk.StringVar(value=self.config.get("bits_sound_path", ""))
         self.sub_sound_path = tk.StringVar(value=self.config.get("subscription_sound_path", ""))
+        self.bits_volume_var = tk.DoubleVar(value=self.config.get("bits_sound_volume", 80))
+        self.sub_volume_var = tk.DoubleVar(value=self.config.get("subscription_sound_volume", 80))
         # コメントログカスタム
         self.comment_bg = tk.StringVar(value=self.config.get("comment_log_bg", "#0E1728"))
         self.comment_fg = tk.StringVar(value=self.config.get("comment_log_fg", "#E8F0FF"))
@@ -203,6 +208,8 @@ class TwitchBotApp:
         self.nav_buttons = {}  # パネルナビゲーションボタンの参照
         self.tts_volume_var = tk.DoubleVar(value=self.config.get("tts_volume", 80))
         self.tts_speed_var = tk.DoubleVar(value=self.config.get("tts_speed", 1.0))
+        self.voice_var = tk.BooleanVar(value=False)  # 音声認識トグル
+        self.tts_include_name_var = tk.BooleanVar(value=self.config.get("tts_include_name", False))  # 名前読み上げ
 
         # 音声翻訳クラスの初期化
         self.voice_translator = VoiceTranslator(
@@ -214,6 +221,9 @@ class TwitchBotApp:
 
         # TTS (Text-to-Speech) の初期化
         self.tts = get_tts_instance()
+        # 設定からスピーカーIDを適用
+        saved_speaker_id = self.config.get("voicevox_speaker_id", 14)
+        self.tts.set_speaker(saved_speaker_id)
 
         # VOICEVOX Engine Manager の初期化
         voicevox_engine_path = self.config.get("voicevox_engine_path", "")
@@ -375,14 +385,17 @@ class TwitchBotApp:
 
         ctk.CTkFrame(right, width=1, height=24, fg_color=BORDER).pack(side="left", padx=8)
 
-        ctk.CTkButton(
-            right, text="🔑", command=self.start_auth, width=32, height=32,
-            fg_color="transparent", hover_color=PANEL_BG
-        ).pack(side="left", padx=2)
+        self.auth_btn = ctk.CTkButton(
+            right, text="🔑 認証", command=self.start_auth,
+            width=70, height=32,
+            fg_color="#0891B2", hover_color="#0E7490",
+            text_color="#FFFFFF"
+        )
+        self.auth_btn.pack(side="left", padx=2)
 
         ctk.CTkButton(
-            right, text="🚪", command=self.logout, width=32, height=32,
-            fg_color="transparent", hover_color="#7F1D1D", text_color="#EF4444"
+            right, text="⏹ 切断", command=self.disconnect_all, width=70, height=32,
+            fg_color="#DC2626", hover_color="#B91C1C", text_color="#FFFFFF"
         ).pack(side="left", padx=2)
 
         # サブタイトル
@@ -420,7 +433,7 @@ class TwitchBotApp:
         sidebar.pack(side="left", fill="y", padx=(0, 8))
         sidebar.pack_propagate(False)
 
-        scroll = ctk.CTkScrollableFrame(sidebar, fg_color="transparent")
+        scroll = ctk.CTkFrame(sidebar, fg_color="transparent")
         scroll.pack(fill="both", expand=True, padx=10, pady=10)
 
         # === 翻訳モード ===
@@ -435,7 +448,7 @@ class TwitchBotApp:
 
         self._add_sidebar_toggle(scroll, "チャット翻訳", self.chat_translation_enabled, self._on_translation_toggle_changed)
         self._add_sidebar_toggle(scroll, "名前も読み上げ", self.tts_include_name_var, None)
-        self._add_sidebar_toggle(scroll, "音声認識", self.voice_var, self.toggle_voice)
+        self._add_sidebar_toggle(scroll, "🎤 声→翻訳チャット", self.voice_var, self.toggle_voice)
 
         # === 音量・速度スライダー ===
         self._add_sidebar_slider(scroll, "音量", self.tts_volume_var, 0, 100, "%")
@@ -455,7 +468,8 @@ class TwitchBotApp:
         for panel_id, label in nav_items:
             btn = ctk.CTkButton(
                 scroll, text=label, command=lambda p=panel_id: self._toggle_right_panel(p),
-                fg_color="transparent", hover_color=CARD_BG, anchor="w", height=36
+                fg_color=CARD_BG, hover_color=ACCENT, anchor="w", height=36,
+                text_color="#FFFFFF", corner_radius=6
             )
             btn.pack(fill="x", pady=2)
             self.nav_buttons[panel_id] = btn
@@ -463,39 +477,32 @@ class TwitchBotApp:
         # 区切り線
         ctk.CTkFrame(scroll, height=1, fg_color=BORDER).pack(fill="x", pady=12)
 
-        # === 出力ボタン ===
-        self._add_sidebar_section(scroll, "出力")
-        out_grid = ctk.CTkFrame(scroll, fg_color="transparent")
-        out_grid.pack(fill="x")
-        out_grid.grid_columnconfigure((0, 1), weight=1)
-
-        outputs = [
-            ("📄 テキスト", self.export_log_text),
-            ("📊 JSON", self.export_log_json),
-            ("🌐 HTML", self.open_chat_html_in_browser),
-            ("👁 確認", lambda: self.chat_html_output.set(not self.chat_html_output.get())),
-        ]
-        for i, (label, cmd) in enumerate(outputs):
-            ctk.CTkButton(
-                out_grid, text=label, command=cmd, fg_color=CARD_BG, hover_color=BORDER,
-                height=28, font=("Segoe UI", 10)
-            ).grid(row=i // 2, column=i % 2, padx=2, pady=2, sticky="ew")
-
-        # === 下部アクション ===
-        spacer = ctk.CTkFrame(scroll, fg_color="transparent")
-        spacer.pack(fill="both", expand=True)
-
-        bottom = ctk.CTkFrame(scroll, fg_color="transparent")
-        bottom.pack(fill="x", side="bottom")
+        # === 下部アクション（ログ操作ボタン） ===
+        self._add_sidebar_section(scroll, "ログ操作")
 
         ctk.CTkButton(
-            bottom, text="📋 ログをコピー", command=self._copy_log_to_clipboard,
-            fg_color="transparent", hover_color=CARD_BG, anchor="w"
+            scroll, text="📄 テキスト出力", command=self.export_log_text,
+            fg_color="#3B82F6", hover_color="#2563EB", height=32
         ).pack(fill="x", pady=2)
 
         ctk.CTkButton(
-            bottom, text="🗑 ログをクリア", command=self.clear_log,
-            fg_color="transparent", hover_color="#7F1D1D", text_color="#EF4444", anchor="w"
+            scroll, text="📊 JSON出力", command=self.export_log_json,
+            fg_color="#8B5CF6", hover_color="#7C3AED", height=32
+        ).pack(fill="x", pady=2)
+
+        ctk.CTkButton(
+            scroll, text="🗑 ログクリア", command=self.clear_log,
+            fg_color="#6B7280", hover_color="#4B5563", height=32
+        ).pack(fill="x", pady=2)
+
+        ctk.CTkSwitch(
+            scroll, text="💾 HTML出力", variable=self.chat_html_output,
+            command=self.toggle_chat_html_output, font=FONT_BODY
+        ).pack(fill="x", pady=4)
+
+        ctk.CTkButton(
+            scroll, text="🌐 ブラウザで確認", command=self.open_chat_html_in_browser,
+            fg_color="#0D9488", hover_color="#0F766E", height=32
         ).pack(fill="x", pady=2)
 
     def _add_sidebar_section(self, parent, text):
@@ -529,6 +536,16 @@ class TwitchBotApp:
 
         ctk.CTkSlider(frame, from_=min_val, to=max_val, variable=variable, command=on_change).pack(fill="x", pady=(4, 0))
 
+    def _update_bits_vol_label(self):
+        """Bits効果音の音量ラベルを更新"""
+        if hasattr(self, 'bits_vol_label'):
+            self.bits_vol_label.configure(text=f"{int(self.bits_volume_var.get())}%")
+
+    def _update_sub_vol_label(self):
+        """サブスク効果音の音量ラベルを更新"""
+        if hasattr(self, 'sub_vol_label'):
+            self.sub_vol_label.configure(text=f"{int(self.sub_volume_var.get())}%")
+
     def _copy_log_to_clipboard(self):
         """ログをクリップボードにコピー"""
         if not self.log_history:
@@ -556,22 +573,14 @@ class TwitchBotApp:
         self.left_frame = ctk.CTkFrame(self.main_paned, fg_color=CARD_BG, corner_radius=12)
         self._build_chat_log_area()
 
-        # === 右: 特別イベント + 参加者 ===
-        self.right_paned = tk.PanedWindow(self.main_paned, orient=tk.VERTICAL, sashwidth=4, bg=BORDER, bd=0)
-
-        self.event_frame = ctk.CTkFrame(self.right_paned, fg_color=CARD_BG, corner_radius=12)
+        # === 右: 特別イベント（全体） ===
+        self.event_frame = ctk.CTkFrame(self.main_paned, fg_color=CARD_BG, corner_radius=12)
         self._build_event_log_area()
 
-        self.participant_frame = ctk.CTkFrame(self.right_paned, fg_color=CARD_BG, corner_radius=12)
-        self._build_participant_area()
+        self.main_paned.add(self.left_frame, minsize=500, stretch="always")
+        self.main_paned.add(self.event_frame, minsize=200, width=280)
 
-        self.right_paned.add(self.event_frame, minsize=100)
-        self.right_paned.add(self.participant_frame, minsize=100)
-
-        self.main_paned.add(self.left_frame, minsize=400, stretch="always")
-        self.main_paned.add(self.right_paned, minsize=200, width=280)
-
-        # 参加者リスト自動更新
+        # 参加者リスト自動更新（右パネル用）
         self.participant_refresh_timer = None
         self.start_participant_auto_refresh()
 
@@ -582,47 +591,36 @@ class TwitchBotApp:
 
     def _build_chat_log_area(self):
         """チャットログエリアを構築"""
-        self.left_frame.grid_rowconfigure(1, weight=1)
+        self.left_frame.grid_rowconfigure(0, weight=1)
         self.left_frame.grid_columnconfigure(0, weight=1)
-
-        # ヘッダー
-        header = ctk.CTkFrame(self.left_frame, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", pady=(10, 8), padx=6)
-        ctk.CTkLabel(header, text="💬 コメントログ", font=FONT_LABEL).pack(side="left", padx=10)
 
         # 垂直分割 (タイル | システムログ)
         self.comment_paned = tk.PanedWindow(self.left_frame, orient=tk.VERTICAL, sashwidth=4, bg=BORDER, bd=0)
-        self.comment_paned.grid(row=1, column=0, sticky="nsew", padx=8)
+        self.comment_paned.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
 
-        # タイル表示
+        # タイル表示（コメントログ）
         tile_container = ctk.CTkFrame(self.comment_paned)
-        self.comment_tile_frame = ctk.CTkScrollableFrame(tile_container, fg_color="transparent", height=260, corner_radius=10)
-        self.comment_tile_frame.pack(fill="both", expand=True, padx=4, pady=4)
+        tile_header = ctk.CTkFrame(tile_container, fg_color="transparent")
+        tile_header.pack(fill="x", padx=6, pady=(6, 4))
+        ctk.CTkLabel(tile_header, text="💬 コメントログ", font=FONT_LABEL).pack(side="left")
+
+        self.comment_tile_frame = ctk.CTkScrollableFrame(tile_container, fg_color="transparent", height=400, corner_radius=10)
+        self.comment_tile_frame.pack(fill="both", expand=True, padx=4, pady=(0, 4))
         self.comment_tiles = []
         self.comment_tile_limit = 120
 
         # システムログ
         log_container = ctk.CTkFrame(self.comment_paned)
         ctk.CTkLabel(log_container, text="📋 システムログ", font=("Segoe UI Semibold", 11), anchor="w").pack(fill="x", padx=5, pady=(4, 2))
-        self.log = ctk.CTkTextbox(log_container, width=500, height=120, font=("Consolas", 11))
+        self.log = ctk.CTkTextbox(log_container, width=500, height=100, font=("Consolas", 11))
         self._apply_log_style(self.log)
         self.log.pack(fill="both", expand=True, padx=5, pady=(0, 4))
         self.log.insert("0.0", "--- システムログ開始 ---\n")
 
-        self.comment_paned.add(tile_container, minsize=200)
-        self.comment_paned.add(log_container, minsize=100)
+        self.comment_paned.add(tile_container, minsize=300)
+        self.comment_paned.add(log_container, minsize=80)
 
         self.log_history = []
-
-        # ボタンフレーム
-        btn_frame = ctk.CTkFrame(self.left_frame, fg_color="transparent")
-        btn_frame.grid(row=2, column=0, sticky="ew", pady=(6, 10), padx=8)
-
-        ctk.CTkButton(btn_frame, text="📄 テキスト出力", command=self.export_log_text, fg_color="#3B82F6", hover_color="#2563EB", width=110).pack(side="left", padx=(0, 5))
-        ctk.CTkButton(btn_frame, text="📊 JSON出力", command=self.export_log_json, fg_color="#8B5CF6", hover_color="#7C3AED", width=100).pack(side="left", padx=5)
-        ctk.CTkButton(btn_frame, text="🗑 ログクリア", command=self.clear_log, fg_color="#6B7280", hover_color="#4B5563", width=100).pack(side="left", padx=5)
-        ctk.CTkSwitch(btn_frame, text="💾 HTML出力", variable=self.chat_html_output, command=self.toggle_chat_html_output, font=FONT_BODY).pack(side="left", padx=8)
-        ctk.CTkButton(btn_frame, text="🌐 ブラウザ", command=self.open_chat_html_in_browser, fg_color="#0D9488", hover_color="#0F766E", width=90).pack(side="left", padx=5)
 
     def _build_event_log_area(self):
         """特別イベントログエリアを構築"""
@@ -706,9 +704,9 @@ class TwitchBotApp:
         """ナビゲーションボタンの選択状態を更新"""
         for pid, btn in self.nav_buttons.items():
             if pid == self.active_panel:
-                btn.configure(fg_color=ACCENT + "20" if len(ACCENT) == 7 else ACCENT, text_color=ACCENT)
+                btn.configure(fg_color=ACCENT, text_color="#FFFFFF")
             else:
-                btn.configure(fg_color="transparent", text_color="#FFFFFF")
+                btn.configure(fg_color=CARD_BG, text_color="#FFFFFF")
 
     def _add_panel_section(self, parent, title):
         """パネルセクションタイトルを追加"""
@@ -749,6 +747,23 @@ class TwitchBotApp:
         ctk.CTkCheckBox(opts, text="自動起動", variable=self.voicevox_auto_start, font=("Segoe UI", 10)).pack(side="left")
         ctk.CTkButton(opts, text="接続テスト", command=self.test_voicevox_connection, width=80, height=28).pack(side="left", padx=8)
 
+        # ボイス選択
+        ctk.CTkLabel(parent, text="ボイス選択", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(8, 0))
+        voice_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        voice_frame.pack(fill="x", pady=(0, 4))
+
+        self.voice_selector = ctk.CTkOptionMenu(
+            voice_frame,
+            variable=self.voicevox_speaker_name,
+            values=["冥鳴ひまり / ノーマル"],
+            width=180,
+            command=self._on_voice_selected
+        )
+        self.voice_selector.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+        ctk.CTkButton(voice_frame, text="更新", command=self._refresh_voice_list, width=50, height=28).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(voice_frame, text="🔊 テスト", command=self._test_voice_playback, width=70, height=28, fg_color="#2e8b57", hover_color="#236b43").pack(side="left")
+
         self._add_panel_divider(parent)
 
         # UIテーマ
@@ -761,60 +776,143 @@ class TwitchBotApp:
 
         self._add_panel_divider(parent)
 
+        # コメントログ外観
+        self._add_panel_section(parent, "コメントログ外観")
+
+        ctk.CTkLabel(parent, text="背景色", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w")
+        ctk.CTkEntry(parent, textvariable=self.comment_bg, height=32).pack(fill="x", pady=(0, 4))
+
+        ctk.CTkLabel(parent, text="テキスト色", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w")
+        ctk.CTkEntry(parent, textvariable=self.comment_fg, height=32).pack(fill="x", pady=(0, 4))
+
+        ctk.CTkLabel(parent, text="フォント", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w")
+        ctk.CTkEntry(parent, textvariable=self.comment_font, height=32).pack(fill="x", pady=(0, 4))
+
+        ctk.CTkLabel(parent, text="バブルスタイル", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w")
+        ctk.CTkOptionMenu(parent, values=["classic", "modern", "box", "bubble", "neon", "cute", "minimal"],
+                          variable=self.comment_bubble_style, width=280).pack(fill="x", pady=(0, 4))
+
+        self._add_panel_divider(parent)
+
+        # HTML表示設定
+        self._add_panel_section(parent, "HTML表示設定")
+        ctk.CTkCheckBox(parent, text="上が新しいコメント", variable=self.chat_html_newest_first, font=("Segoe UI", 10)).pack(anchor="w", pady=4)
+
+        self._add_panel_divider(parent)
+
+        # イベント効果音
+        self._add_panel_section(parent, "イベント効果音")
+
+        ctk.CTkLabel(parent, text="Bits効果音", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w")
+        bits_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        bits_frame.pack(fill="x", pady=(0, 4))
+        ctk.CTkEntry(bits_frame, textvariable=self.bits_sound_path, height=32).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(bits_frame, text="参照", command=lambda: self.select_event_sound("bits"), width=50, height=32).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(bits_frame, text="再生", command=lambda: self.play_event_sound("bits"), width=50, height=32, fg_color="#2e8b57", hover_color="#236b43").pack(side="left")
+
+        # Bits音量スライダー
+        bits_vol_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        bits_vol_frame.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(bits_vol_frame, text="音量", font=("Segoe UI", 10), text_color=TEXT_SUBTLE, width=40).pack(side="left")
+        ctk.CTkSlider(bits_vol_frame, from_=0, to=100, variable=self.bits_volume_var, width=200, command=lambda v: self._update_bits_vol_label()).pack(side="left", fill="x", expand=True, padx=4)
+        self.bits_vol_label = ctk.CTkLabel(bits_vol_frame, text=f"{int(self.bits_volume_var.get())}%", font=("Consolas", 10), width=40)
+        self.bits_vol_label.pack(side="right")
+
+        ctk.CTkLabel(parent, text="サブスク効果音", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(8, 0))
+        sub_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        sub_frame.pack(fill="x", pady=(0, 4))
+        ctk.CTkEntry(sub_frame, textvariable=self.sub_sound_path, height=32).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(sub_frame, text="参照", command=lambda: self.select_event_sound("subscription"), width=50, height=32).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(sub_frame, text="再生", command=lambda: self.play_event_sound("subscription"), width=50, height=32, fg_color="#2e8b57", hover_color="#236b43").pack(side="left")
+
+        # サブスク音量スライダー
+        sub_vol_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        sub_vol_frame.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(sub_vol_frame, text="音量", font=("Segoe UI", 10), text_color=TEXT_SUBTLE, width=40).pack(side="left")
+        ctk.CTkSlider(sub_vol_frame, from_=0, to=100, variable=self.sub_volume_var, width=200, command=lambda v: self._update_sub_vol_label()).pack(side="left", fill="x", expand=True, padx=4)
+        self.sub_vol_label = ctk.CTkLabel(sub_vol_frame, text=f"{int(self.sub_volume_var.get())}%", font=("Consolas", 10), width=40)
+        self.sub_vol_label.pack(side="right")
+
+        self._add_panel_divider(parent)
+
         # 保存ボタン
         ctk.CTkButton(parent, text="設定を保存", command=self.save_settings, height=40).pack(fill="x", pady=(8, 0))
 
     def _build_dictionary_panel(self, parent):
         """辞書パネルのコンテンツ"""
-        # 読み上げ辞書
-        self._add_panel_section(parent, "読み上げ辞書")
-        ctk.CTkLabel(parent, text="漢字の読み間違いを修正するための辞書", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(0, 4))
+        try:
+            # =====================================
+            # セクション1: 読み上げ辞書
+            # =====================================
+            self._add_panel_section(parent, "読み上げ辞書")
+            ctk.CTkLabel(parent, text="漢字の読み間違いを修正", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(0, 4))
 
-        add_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        add_frame.pack(fill="x", pady=(0, 8))
-        self.dict_word_entry = ctk.CTkEntry(add_frame, placeholder_text="単語", height=32, width=100)
-        self.dict_word_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
-        self.dict_reading_entry = ctk.CTkEntry(add_frame, placeholder_text="読み", height=32, width=100)
-        self.dict_reading_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
-        ctk.CTkButton(add_frame, text="+", command=self._add_tts_dict_entry, width=32, height=32).pack(side="right")
+            add_frame = ctk.CTkFrame(parent, fg_color="transparent")
+            add_frame.pack(fill="x", pady=(0, 4))
+            self.dict_word_entry = ctk.CTkEntry(add_frame, placeholder_text="単語", height=28, width=80)
+            self.dict_word_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+            self.dict_reading_entry = ctk.CTkEntry(add_frame, placeholder_text="読み", height=28, width=80)
+            self.dict_reading_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+            ctk.CTkButton(add_frame, text="+", command=self._add_tts_dict_entry, width=28, height=28).pack(side="right")
 
-        self.dict_list_frame = ctk.CTkScrollableFrame(parent, height=120, fg_color=CARD_BG)
-        self.dict_list_frame.pack(fill="x", pady=(0, 8))
-        self._refresh_dict_list()
+            self.dict_list_frame = ctk.CTkFrame(parent, fg_color=CARD_BG, height=60)
+            self.dict_list_frame.pack(fill="x", pady=(0, 6))
+            self.dict_list_frame.pack_propagate(False)
+            try:
+                self._refresh_dict_list()
+            except Exception as e:
+                logger.error(f"_refresh_dict_list error: {e}")
 
-        self._add_panel_divider(parent)
+            self._add_panel_divider(parent)
 
-        # 翻訳フィルター
-        self._add_panel_section(parent, "翻訳フィルター")
-        ctk.CTkLabel(parent, text="含まれると翻訳スキップ", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(0, 4))
+            # =====================================
+            # セクション2: 翻訳フィルター
+            # =====================================
+            self._add_panel_section(parent, "翻訳フィルター")
+            ctk.CTkLabel(parent, text="含まれると翻訳スキップ", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(0, 4))
 
-        filter_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        filter_frame.pack(fill="x", pady=(0, 8))
-        self.filter_entry = ctk.CTkEntry(filter_frame, placeholder_text="スキップワード", height=32)
-        self.filter_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
-        ctk.CTkButton(filter_frame, text="+", command=self._add_filter_word, width=32, height=32).pack(side="right")
+            filter_frame = ctk.CTkFrame(parent, fg_color="transparent")
+            filter_frame.pack(fill="x", pady=(0, 4))
+            self.filter_entry = ctk.CTkEntry(filter_frame, placeholder_text="スキップワード", height=28)
+            self.filter_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+            ctk.CTkButton(filter_frame, text="+", command=self._add_filter_word, width=28, height=28).pack(side="right")
 
-        self.filter_list_frame = ctk.CTkScrollableFrame(parent, height=80, fg_color=CARD_BG)
-        self.filter_list_frame.pack(fill="x", pady=(0, 8))
-        self._refresh_filter_list()
+            self.filter_list_frame = ctk.CTkFrame(parent, fg_color=CARD_BG, height=50)
+            self.filter_list_frame.pack(fill="x", pady=(0, 6))
+            self.filter_list_frame.pack_propagate(False)
+            try:
+                self._refresh_filter_list()
+            except Exception as e:
+                logger.error(f"_refresh_filter_list error: {e}")
 
-        self._add_panel_divider(parent)
+            self._add_panel_divider(parent)
 
-        # 翻訳カスタム辞書
-        self._add_panel_section(parent, "翻訳カスタム辞書")
-        ctk.CTkLabel(parent, text="翻訳前に置換", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(0, 4))
+            # =====================================
+            # セクション3: 翻訳カスタム辞書
+            # =====================================
+            self._add_panel_section(parent, "翻訳カスタム辞書")
+            ctk.CTkLabel(parent, text="翻訳前に置換", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(0, 4))
 
-        custom_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        custom_frame.pack(fill="x", pady=(0, 8))
-        self.custom_before_entry = ctk.CTkEntry(custom_frame, placeholder_text="元の文言", height=32, width=100)
-        self.custom_before_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
-        self.custom_after_entry = ctk.CTkEntry(custom_frame, placeholder_text="置換後", height=32, width=100)
-        self.custom_after_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
-        ctk.CTkButton(custom_frame, text="+", command=self._add_custom_dict_entry, width=32, height=32).pack(side="right")
+            custom_frame = ctk.CTkFrame(parent, fg_color="transparent")
+            custom_frame.pack(fill="x", pady=(0, 4))
+            self.custom_before_entry = ctk.CTkEntry(custom_frame, placeholder_text="元", height=28, width=80)
+            self.custom_before_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+            self.custom_after_entry = ctk.CTkEntry(custom_frame, placeholder_text="後", height=28, width=80)
+            self.custom_after_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+            ctk.CTkButton(custom_frame, text="+", command=self._add_custom_dict_entry, width=28, height=28).pack(side="right")
 
-        self.custom_list_frame = ctk.CTkScrollableFrame(parent, height=80, fg_color=CARD_BG)
-        self.custom_list_frame.pack(fill="x", pady=(0, 8))
-        self._refresh_custom_dict_list()
+            self.custom_list_frame = ctk.CTkFrame(parent, fg_color=CARD_BG, height=50)
+            self.custom_list_frame.pack(fill="x", pady=(0, 6))
+            self.custom_list_frame.pack_propagate(False)
+            try:
+                self._refresh_custom_dict_list()
+            except Exception as e:
+                logger.error(f"_refresh_custom_dict_list error: {e}")
+
+        except Exception as e:
+            logger.error(f"辞書パネル構築エラー: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _build_participants_panel(self, parent):
         """参加者パネルのコンテンツ"""
@@ -1718,6 +1816,59 @@ class TwitchBotApp:
 
         threading.Thread(target=test_thread, daemon=True).start()
 
+    def _refresh_voice_list(self):
+        """VOICEVOXからボイス一覧を取得して更新"""
+        try:
+            if not hasattr(self, 'tts') or self.tts is None:
+                self.tts = get_tts_instance()
+
+            speakers = self.tts.get_speakers_list()
+            if speakers:
+                self.voicevox_speakers_cache = speakers
+                display_names = [s['display'] for s in speakers]
+                if hasattr(self, 'voice_selector'):
+                    self.voice_selector.configure(values=display_names)
+                    # 現在のスピーカーをリストから選択
+                    current_id = self.voicevox_speaker_id.get()
+                    for s in speakers:
+                        if s['id'] == current_id:
+                            self.voicevox_speaker_name.set(s['display'])
+                            break
+                self.log_message(f"✅ {len(speakers)}個のボイスを取得しました")
+            else:
+                self.log_message("⚠️ ボイス一覧を取得できませんでした。VOICEVOX Engineが起動しているか確認してください")
+        except Exception as e:
+            self.log_message(f"❌ ボイス一覧取得エラー: {e}")
+
+    def _on_voice_selected(self, selection):
+        """ボイス選択時のコールバック"""
+        for s in self.voicevox_speakers_cache:
+            if s['display'] == selection:
+                self.voicevox_speaker_id.set(s['id'])
+                if hasattr(self, 'tts') and self.tts:
+                    self.tts.set_speaker(s['id'])
+                self.config["voicevox_speaker_id"] = s['id']
+                self.config["voicevox_speaker_name"] = selection
+                save_config(self.config)
+                self.log_message(f"🎤 ボイスを変更: {selection}")
+                break
+
+    def _test_voice_playback(self):
+        """選択したボイスでテスト再生"""
+        try:
+            if not hasattr(self, 'tts') or self.tts is None:
+                self.tts = get_tts_instance()
+
+            # 選択中のスピーカーIDを設定
+            speaker_id = self.voicevox_speaker_id.get()
+            self.tts.set_speaker(speaker_id)
+
+            # テスト音声を再生
+            self.tts.speak("これはテスト音声です。ボイスの確認をしています。")
+            self.log_message("🔊 テスト音声を再生しました")
+        except Exception as e:
+            self.log_message(f"❌ テスト再生エラー: {e}")
+
     def browse_voicevox_path(self):
         """VOICEVOX Engineの実行ファイルを選択"""
         file_path = filedialog.askopenfilename(
@@ -1774,6 +1925,8 @@ class TwitchBotApp:
             self.lang_mode,
             self.bits_sound_path,
             self.sub_sound_path,
+            self.bits_volume_var,
+            self.sub_volume_var,
             self.comment_bg,
             self.comment_fg,
             self.comment_font,
@@ -1795,10 +1948,14 @@ class TwitchBotApp:
             self.config["gladia_api_key"] = self.gladia_key.get().strip()
             self.config["voicevox_engine_path"] = self.voicevox_path.get().strip()
             self.config["voicevox_auto_start"] = self.voicevox_auto_start.get()
+            self.config["voicevox_speaker_id"] = self.voicevox_speaker_id.get()
+            self.config["voicevox_speaker_name"] = self.voicevox_speaker_name.get()
             self.config["channel_name"] = self.channel.get().strip()
             self.config["translate_mode"] = self.lang_mode.get()
             self.config["bits_sound_path"] = self.bits_sound_path.get().strip()
             self.config["subscription_sound_path"] = self.sub_sound_path.get().strip()
+            self.config["bits_sound_volume"] = int(self.bits_volume_var.get())
+            self.config["subscription_sound_volume"] = int(self.sub_volume_var.get())
             self.config["comment_log_bg"] = self.comment_bg.get().strip()
             self.config["comment_log_fg"] = self.comment_fg.get().strip()
             self.config["comment_log_font"] = self.comment_font.get().strip()
@@ -2821,8 +2978,14 @@ window.onload = function() {{
             if not pygame.mixer.get_init():
                 pygame.mixer.init()
             sound = pygame.mixer.Sound(path)
+            # 音量を設定 (0.0〜1.0)
+            if event_type == "bits":
+                volume = self.bits_volume_var.get() / 100.0
+            else:
+                volume = self.sub_volume_var.get() / 100.0
+            sound.set_volume(volume)
             sound.play()
-            logger.debug(f"Played event SFX ({event_type}): {path}")
+            logger.debug(f"Played event SFX ({event_type}): {path} at volume {volume:.2f}")
         except Exception as e:
             logger.error(f"効果音の再生に失敗しました ({event_type}): {e}", exc_info=True)
 
@@ -2847,7 +3010,8 @@ window.onload = function() {{
 
         # 参加者数を更新
         count = self.tracker.get_count()
-        self.main_participant_count_label.configure(text=f"({count}人)")
+        if hasattr(self, 'main_participant_count_label'):
+            self.main_participant_count_label.configure(text=f"({count}人)")
 
         # 参加者を表示
         participants = self.tracker.get_participants()
@@ -3036,15 +3200,52 @@ window.onload = function() {{
             self.log_message("⚠ トークンの取得に失敗しました。")
             self._set_status("トークンの取得に失敗しました。再試行してください。", "error")
 
+    def disconnect_all(self):
+        """全ての接続を切断（BOT、TTS、音声認識）"""
+        stopped_items = []
+
+        # BOTを停止
+        if self.bot_instance:
+            self.stop_bot()
+            stopped_items.append("チャットBOT")
+
+        # 音声認識を停止
+        if hasattr(self, 'voice_var') and self.voice_var.get():
+            self.voice_var.set(False)
+            try:
+                self.voice_translator.stop()
+                stopped_items.append("音声認識")
+            except Exception as e:
+                logger.error(f"音声認識停止エラー: {e}")
+
+        # TTSを停止
+        if hasattr(self, 'tts') and self.tts and self.tts.enabled:
+            try:
+                self.tts.stop()
+                stopped_items.append("読み上げ(TTS)")
+            except Exception as e:
+                logger.error(f"TTS停止エラー: {e}")
+
+        # UI更新
+        self._update_header_bot_button(False)
+        self._update_connection_badge(False)
+
+        if stopped_items:
+            msg = "、".join(stopped_items) + " を停止しました"
+            self.log_message(f"⏹ {msg}")
+            self._set_status(msg, "warn")
+        else:
+            self.log_message("⏹ 停止するサービスがありませんでした")
+            self._set_status("サービスは停止中です", "info")
+
     def logout(self):
         """保存されたトークンをクリアしてログアウト"""
         if not self.token and not self.config.get("twitch_access_token"):
             messagebox.showinfo("情報", "ログインしていません。")
             return
 
-        # BOTが起動中の場合は停止
-        if self.bot_instance:
-            self.stop_bot()
+        # 全サービスを停止
+        self.disconnect_all()
 
         # トークンをクリア
         self.token = None
@@ -3053,7 +3254,7 @@ window.onload = function() {{
 
         self.log_message("🚪 ログアウトしました。")
         self._set_status("ログアウト完了。再度認証が必要です。", "info")
-        messagebox.showinfo("ログアウト", "ログアウトしました。\n再度ログインするには「① トークン認証」を実行してください。")
+        messagebox.showinfo("ログアウト", "ログアウトしました。\n再度ログインするには「🔑 認証」を実行してください。")
 
     def start_bot(self):
         # 既存のBOTがあれば停止（多重起動防止）
