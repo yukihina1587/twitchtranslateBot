@@ -196,6 +196,14 @@ class TwitchBotApp:
         # 参加者タブ自動更新用
         self.participant_tab_refresh_timer = None
 
+        # === 新レイアウト用の状態変数 ===
+        self.active_panel = None  # "settings" | "dictionary" | "participants" | "resources" | None
+        self.right_panel_frame = None  # 右パネルのフレーム参照
+        self.right_panel_content = None  # 右パネルのコンテンツフレーム参照
+        self.nav_buttons = {}  # パネルナビゲーションボタンの参照
+        self.tts_volume_var = tk.DoubleVar(value=self.config.get("tts_volume", 80))
+        self.tts_speed_var = tk.DoubleVar(value=self.config.get("tts_speed", 1.0))
+
         # 音声翻訳クラスの初期化
         self.voice_translator = VoiceTranslator(
             mode_getter=lambda: self.lang_mode.get(),
@@ -298,34 +306,749 @@ class TwitchBotApp:
         self.log_message("⚠️ 一部の色変更を反映するには、アプリを再起動してください")
 
     def build_widgets(self):
-        # メインコンテナ
+        """新レイアウト: ヘッダー + 左サイドバー + メインコンテンツ + 折りたたみ右パネル"""
+        # ルートコンテナ
         self.main_frame = ctk.CTkFrame(self.master, fg_color=APP_BG)
-        self.main_frame.pack(fill="both", expand=True, padx=12, pady=12)
+        self.main_frame.pack(fill="both", expand=True)
 
-        # タブビュー作成
-        self.tabview = ctk.CTkTabview(self.main_frame, fg_color=PANEL_BG, segmented_button_fg_color=CARD_BG)
-        self.tabview.pack(fill="both", expand=True)
+        # === ヘッダー構築 ===
+        self._build_header()
 
-        self.tab_main = self.tabview.add("メイン操作")
-        self.tab_settings = self.tabview.add("設定")
-        self.tab_dictionary = self.tabview.add("読み上げ辞書")
-        self.tab_participants = self.tabview.add("参加者管理")
-        self.tab_resources = self.tabview.add("リソース監視")
+        # === ボディコンテナ（サイドバー + メイン + 右パネル） ===
+        self.body_container = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        self.body_container.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
-        # === メイン操作タブ ===
-        self.build_main_tab()
+        # 左サイドバー構築
+        self._build_left_sidebar()
 
-        # === 設定タブ ===
-        self.build_settings_tab()
+        # メインコンテンツ構築
+        self._build_main_content()
 
-        # === 辞書タブ ===
-        self.build_dictionary_tab()
+        # 右パネル（初期非表示）- 動的に作成される
 
-        # === 参加者タブ ===
-        self.build_participants_tab()
+    # ========================================
+    # 新レイアウトコンポーネント
+    # ========================================
 
-        # === リソース監視タブ ===
-        self.build_resource_monitor_tab()
+    def _build_header(self):
+        """コンパクトなヘッダーバー（接続状態、チャンネル入力、開始/停止ボタン）"""
+        header = ctk.CTkFrame(self.main_frame, fg_color=CARD_BG, height=70, corner_radius=0)
+        header.pack(fill="x", side="top")
+        header.pack_propagate(False)
+
+        inner = ctk.CTkFrame(header, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=16, pady=8)
+        inner.grid_columnconfigure(1, weight=1)
+
+        # === 左側: タイトル + バッジ ===
+        left = ctk.CTkFrame(inner, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="w")
+
+        ctk.CTkLabel(left, text="ことつな！", font=("Segoe UI Semibold", 18)).pack(side="left", padx=(0, 12))
+
+        self.connection_badge = ctk.CTkLabel(
+            left, text="● 未接続", fg_color=PANEL_BG, corner_radius=12,
+            font=("Segoe UI", 11), padx=10, pady=4
+        )
+        self.connection_badge.pack(side="left", padx=(0, 12))
+
+        self.header_stats_label = ctk.CTkLabel(
+            left, text="0 req / 0 hit / 0 filtered",
+            font=("Consolas", 10), text_color=TEXT_SUBTLE
+        )
+        self.header_stats_label.pack(side="left")
+
+        # === 右側: チャンネル入力 + ボタン群 ===
+        right = ctk.CTkFrame(inner, fg_color="transparent")
+        right.grid(row=0, column=2, sticky="e")
+
+        ctk.CTkEntry(
+            right, textvariable=self.channel, placeholder_text="チャンネル名",
+            width=140, height=32, fg_color=PANEL_BG, border_color=BORDER
+        ).pack(side="left", padx=(0, 8))
+
+        self.start_stop_btn = ctk.CTkButton(
+            right, text="▶ 開始", command=self._toggle_bot_from_header,
+            width=80, height=32, fg_color=ACCENT, hover_color="#16A34A", text_color="#0B1220"
+        )
+        self.start_stop_btn.pack(side="left", padx=(0, 8))
+
+        ctk.CTkFrame(right, width=1, height=24, fg_color=BORDER).pack(side="left", padx=8)
+
+        ctk.CTkButton(
+            right, text="🔑", command=self.start_auth, width=32, height=32,
+            fg_color="transparent", hover_color=PANEL_BG
+        ).pack(side="left", padx=2)
+
+        ctk.CTkButton(
+            right, text="🚪", command=self.logout, width=32, height=32,
+            fg_color="transparent", hover_color="#7F1D1D", text_color="#EF4444"
+        ).pack(side="left", padx=2)
+
+        # サブタイトル
+        subtitle = ctk.CTkFrame(self.main_frame, fg_color="transparent", height=20)
+        subtitle.pack(fill="x", side="top", padx=16, pady=(0, 6))
+        ctk.CTkLabel(
+            subtitle, text="翻訳・読み上げ・参加者管理をまとめたコントロールセンター",
+            font=("Segoe UI", 10), text_color=TEXT_SUBTLE
+        ).pack(side="left")
+
+    def _toggle_bot_from_header(self):
+        """ヘッダーの開始/停止ボタンのハンドラー"""
+        if self.bot_instance is None or not getattr(self.bot_instance, 'running', False):
+            self.start_bot()
+        else:
+            self.stop_bot()
+
+    def _update_header_bot_button(self, running: bool):
+        """ヘッダーの開始/停止ボタンの表示を更新"""
+        if running:
+            self.start_stop_btn.configure(text="■ 停止", fg_color="#EF4444", hover_color="#DC2626", text_color="#FFFFFF")
+        else:
+            self.start_stop_btn.configure(text="▶ 開始", fg_color=ACCENT, hover_color="#16A34A", text_color="#0B1220")
+
+    def _update_connection_badge(self, connected: bool):
+        """接続バッジの表示を更新"""
+        if connected:
+            self.connection_badge.configure(text="● 接続中", fg_color=ACCENT, text_color="#0B1220")
+        else:
+            self.connection_badge.configure(text="● 未接続", fg_color=PANEL_BG, text_color=TEXT_SUBTLE)
+
+    def _build_left_sidebar(self):
+        """左サイドバー（翻訳モード、トグル、ナビゲーション）"""
+        sidebar = ctk.CTkFrame(self.body_container, fg_color=PANEL_BG, width=240, corner_radius=12)
+        sidebar.pack(side="left", fill="y", padx=(0, 8))
+        sidebar.pack_propagate(False)
+
+        scroll = ctk.CTkScrollableFrame(sidebar, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # === 翻訳モード ===
+        self._add_sidebar_section(scroll, "翻訳モード")
+        ctk.CTkOptionMenu(
+            scroll, variable=self.lang_mode, values=['自動', '英→日', '日→英'],
+            fg_color=CARD_BG, button_color=ACCENT_SECONDARY, height=32
+        ).pack(fill="x", pady=(0, 12))
+
+        # === 機能トグル ===
+        self._add_sidebar_section(scroll, "機能")
+
+        self._add_sidebar_toggle(scroll, "チャット翻訳", self.chat_translation_enabled, self._on_translation_toggle_changed)
+        self._add_sidebar_toggle(scroll, "名前も読み上げ", self.tts_include_name_var, None)
+        self._add_sidebar_toggle(scroll, "音声認識", self.voice_var, self.toggle_voice)
+
+        # === 音量・速度スライダー ===
+        self._add_sidebar_slider(scroll, "音量", self.tts_volume_var, 0, 100, "%")
+        self._add_sidebar_slider(scroll, "速度", self.tts_speed_var, 0.5, 2.0, "x")
+
+        # 区切り線
+        ctk.CTkFrame(scroll, height=1, fg_color=BORDER).pack(fill="x", pady=12)
+
+        # === パネルナビゲーション ===
+        self._add_sidebar_section(scroll, "パネル")
+        nav_items = [
+            ("settings", "⚙️ 設定"),
+            ("dictionary", "📖 辞書"),
+            ("participants", "👥 参加者"),
+            ("resources", "📊 リソース"),
+        ]
+        for panel_id, label in nav_items:
+            btn = ctk.CTkButton(
+                scroll, text=label, command=lambda p=panel_id: self._toggle_right_panel(p),
+                fg_color="transparent", hover_color=CARD_BG, anchor="w", height=36
+            )
+            btn.pack(fill="x", pady=2)
+            self.nav_buttons[panel_id] = btn
+
+        # 区切り線
+        ctk.CTkFrame(scroll, height=1, fg_color=BORDER).pack(fill="x", pady=12)
+
+        # === 出力ボタン ===
+        self._add_sidebar_section(scroll, "出力")
+        out_grid = ctk.CTkFrame(scroll, fg_color="transparent")
+        out_grid.pack(fill="x")
+        out_grid.grid_columnconfigure((0, 1), weight=1)
+
+        outputs = [
+            ("📄 テキスト", self.export_log_text),
+            ("📊 JSON", self.export_log_json),
+            ("🌐 HTML", self.open_chat_html_in_browser),
+            ("👁 確認", lambda: self.chat_html_output.set(not self.chat_html_output.get())),
+        ]
+        for i, (label, cmd) in enumerate(outputs):
+            ctk.CTkButton(
+                out_grid, text=label, command=cmd, fg_color=CARD_BG, hover_color=BORDER,
+                height=28, font=("Segoe UI", 10)
+            ).grid(row=i // 2, column=i % 2, padx=2, pady=2, sticky="ew")
+
+        # === 下部アクション ===
+        spacer = ctk.CTkFrame(scroll, fg_color="transparent")
+        spacer.pack(fill="both", expand=True)
+
+        bottom = ctk.CTkFrame(scroll, fg_color="transparent")
+        bottom.pack(fill="x", side="bottom")
+
+        ctk.CTkButton(
+            bottom, text="📋 ログをコピー", command=self._copy_log_to_clipboard,
+            fg_color="transparent", hover_color=CARD_BG, anchor="w"
+        ).pack(fill="x", pady=2)
+
+        ctk.CTkButton(
+            bottom, text="🗑 ログをクリア", command=self.clear_log,
+            fg_color="transparent", hover_color="#7F1D1D", text_color="#EF4444", anchor="w"
+        ).pack(fill="x", pady=2)
+
+    def _add_sidebar_section(self, parent, text):
+        """サイドバーセクションラベルを追加"""
+        ctk.CTkLabel(parent, text=text.upper(), font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(0, 4))
+
+    def _add_sidebar_toggle(self, parent, label, variable, command):
+        """サイドバートグルスイッチを追加"""
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", pady=2)
+        ctk.CTkLabel(row, text=label, font=FONT_BODY).pack(side="left")
+        ctk.CTkSwitch(row, text="", variable=variable, command=command, width=40).pack(side="right")
+
+    def _add_sidebar_slider(self, parent, label, variable, min_val, max_val, unit):
+        """サイドバースライダーを追加"""
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.pack(fill="x", pady=4)
+
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.pack(fill="x")
+        ctk.CTkLabel(header, text=label.upper(), font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(side="left")
+        value_label = ctk.CTkLabel(header, text=f"{variable.get():.1f}{unit}" if unit == "x" else f"{int(variable.get())}{unit}",
+                                   font=("Consolas", 10), text_color=TEXT_SUBTLE)
+        value_label.pack(side="right")
+
+        def on_change(v):
+            if unit == "x":
+                value_label.configure(text=f"{float(v):.1f}{unit}")
+            else:
+                value_label.configure(text=f"{int(float(v))}{unit}")
+
+        ctk.CTkSlider(frame, from_=min_val, to=max_val, variable=variable, command=on_change).pack(fill="x", pady=(4, 0))
+
+    def _copy_log_to_clipboard(self):
+        """ログをクリップボードにコピー"""
+        if not self.log_history:
+            messagebox.showwarning("警告", "ログが空です。")
+            return
+        try:
+            text = "\n".join([f"[{e['timestamp']}] [{e['type'].upper()}] {e['message']}" for e in self.log_history])
+            self.master.clipboard_clear()
+            self.master.clipboard_append(text)
+            self.master.update()
+            self.log_message("✅ ログをクリップボードにコピーしました")
+        except Exception as e:
+            messagebox.showerror("エラー", f"コピーに失敗しました:\n{e}")
+
+    def _build_main_content(self):
+        """メインコンテンツ（チャットログ + 特別イベント）"""
+        main = ctk.CTkFrame(self.body_container, fg_color="transparent")
+        main.pack(fill="both", expand=True, side="left")
+
+        # 水平PanedWindow
+        self.main_paned = tk.PanedWindow(main, orient=tk.HORIZONTAL, sashwidth=4, bg=BORDER, bd=0)
+        self.main_paned.pack(fill="both", expand=True)
+
+        # === 左: チャットログ ===
+        self.left_frame = ctk.CTkFrame(self.main_paned, fg_color=CARD_BG, corner_radius=12)
+        self._build_chat_log_area()
+
+        # === 右: 特別イベント + 参加者 ===
+        self.right_paned = tk.PanedWindow(self.main_paned, orient=tk.VERTICAL, sashwidth=4, bg=BORDER, bd=0)
+
+        self.event_frame = ctk.CTkFrame(self.right_paned, fg_color=CARD_BG, corner_radius=12)
+        self._build_event_log_area()
+
+        self.participant_frame = ctk.CTkFrame(self.right_paned, fg_color=CARD_BG, corner_radius=12)
+        self._build_participant_area()
+
+        self.right_paned.add(self.event_frame, minsize=100)
+        self.right_paned.add(self.participant_frame, minsize=100)
+
+        self.main_paned.add(self.left_frame, minsize=400, stretch="always")
+        self.main_paned.add(self.right_paned, minsize=200, width=280)
+
+        # 参加者リスト自動更新
+        self.participant_refresh_timer = None
+        self.start_participant_auto_refresh()
+
+        # TTS自動起動
+        self.master.after(300, self._ensure_tts_started)
+        # 統計表示更新
+        self.master.after(1000, self._update_stats_display)
+
+    def _build_chat_log_area(self):
+        """チャットログエリアを構築"""
+        self.left_frame.grid_rowconfigure(1, weight=1)
+        self.left_frame.grid_columnconfigure(0, weight=1)
+
+        # ヘッダー
+        header = ctk.CTkFrame(self.left_frame, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", pady=(10, 8), padx=6)
+        ctk.CTkLabel(header, text="💬 コメントログ", font=FONT_LABEL).pack(side="left", padx=10)
+
+        # 垂直分割 (タイル | システムログ)
+        self.comment_paned = tk.PanedWindow(self.left_frame, orient=tk.VERTICAL, sashwidth=4, bg=BORDER, bd=0)
+        self.comment_paned.grid(row=1, column=0, sticky="nsew", padx=8)
+
+        # タイル表示
+        tile_container = ctk.CTkFrame(self.comment_paned)
+        self.comment_tile_frame = ctk.CTkScrollableFrame(tile_container, fg_color="transparent", height=260, corner_radius=10)
+        self.comment_tile_frame.pack(fill="both", expand=True, padx=4, pady=4)
+        self.comment_tiles = []
+        self.comment_tile_limit = 120
+
+        # システムログ
+        log_container = ctk.CTkFrame(self.comment_paned)
+        ctk.CTkLabel(log_container, text="📋 システムログ", font=("Segoe UI Semibold", 11), anchor="w").pack(fill="x", padx=5, pady=(4, 2))
+        self.log = ctk.CTkTextbox(log_container, width=500, height=120, font=("Consolas", 11))
+        self._apply_log_style(self.log)
+        self.log.pack(fill="both", expand=True, padx=5, pady=(0, 4))
+        self.log.insert("0.0", "--- システムログ開始 ---\n")
+
+        self.comment_paned.add(tile_container, minsize=200)
+        self.comment_paned.add(log_container, minsize=100)
+
+        self.log_history = []
+
+        # ボタンフレーム
+        btn_frame = ctk.CTkFrame(self.left_frame, fg_color="transparent")
+        btn_frame.grid(row=2, column=0, sticky="ew", pady=(6, 10), padx=8)
+
+        ctk.CTkButton(btn_frame, text="📄 テキスト出力", command=self.export_log_text, fg_color="#3B82F6", hover_color="#2563EB", width=110).pack(side="left", padx=(0, 5))
+        ctk.CTkButton(btn_frame, text="📊 JSON出力", command=self.export_log_json, fg_color="#8B5CF6", hover_color="#7C3AED", width=100).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="🗑 ログクリア", command=self.clear_log, fg_color="#6B7280", hover_color="#4B5563", width=100).pack(side="left", padx=5)
+        ctk.CTkSwitch(btn_frame, text="💾 HTML出力", variable=self.chat_html_output, command=self.toggle_chat_html_output, font=FONT_BODY).pack(side="left", padx=8)
+        ctk.CTkButton(btn_frame, text="🌐 ブラウザ", command=self.open_chat_html_in_browser, fg_color="#0D9488", hover_color="#0F766E", width=90).pack(side="left", padx=5)
+
+    def _build_event_log_area(self):
+        """特別イベントログエリアを構築"""
+        header = ctk.CTkFrame(self.event_frame, fg_color="transparent")
+        header.pack(fill="x", pady=(10, 6), padx=6)
+        ctk.CTkLabel(header, text="⭐ 特別イベント", font=FONT_LABEL).pack(side="left", padx=10)
+
+        self.event_log = ctk.CTkTextbox(self.event_frame, width=200, height=150, font=("Consolas", 11))
+        self._apply_log_style(self.event_log)
+        self.event_log.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.event_log.insert("0.0", "--- 特別イベントログ ---\n")
+
+    def _build_participant_area(self):
+        """参加者エリアを構築"""
+        header = ctk.CTkFrame(self.participant_frame, fg_color="transparent")
+        header.pack(fill="x", pady=(10, 6), padx=8)
+        ctk.CTkLabel(header, text="👥 参加者", font=FONT_LABEL).pack(side="left")
+        self.main_participant_count_label = ctk.CTkLabel(header, text="(0人)", font=("Segoe UI Semibold", 13), text_color=TEXT_SUBTLE)
+        self.main_participant_count_label.pack(side="left", padx=5)
+
+        self.main_participant_list = ctk.CTkScrollableFrame(self.participant_frame, height=150, fg_color="transparent")
+        self.main_participant_list.pack(fill="both", expand=True, padx=8, pady=(0, 10))
+
+    # ========================================
+    # 右パネル（折りたたみ可能）
+    # ========================================
+
+    def _toggle_right_panel(self, panel_id: str):
+        """右パネルの表示/非表示を切り替え"""
+        # 同じパネルをクリックした場合は閉じる
+        if self.active_panel == panel_id:
+            self._close_right_panel()
+            return
+
+        # 既存パネルがあれば破棄
+        if self.right_panel_frame:
+            self.right_panel_frame.destroy()
+
+        # 新しいパネルを作成
+        self.active_panel = panel_id
+        self._update_nav_button_states()
+
+        self.right_panel_frame = ctk.CTkFrame(self.body_container, fg_color=PANEL_BG, width=380, corner_radius=12)
+        self.right_panel_frame.pack(fill="y", side="right", padx=(8, 0))
+        self.right_panel_frame.pack_propagate(False)
+
+        # ヘッダー
+        header = ctk.CTkFrame(self.right_panel_frame, fg_color=CARD_BG, height=40, corner_radius=0)
+        header.pack(fill="x")
+        header.pack_propagate(False)
+
+        titles = {"settings": "設定", "dictionary": "辞書管理", "participants": "参加者管理", "resources": "リソース監視"}
+        ctk.CTkLabel(header, text=titles.get(panel_id, ""), font=FONT_LABEL).pack(side="left", padx=12)
+        ctk.CTkButton(header, text="✕", command=self._close_right_panel, width=32, height=32, fg_color="transparent", hover_color=BORDER).pack(side="right", padx=4)
+
+        # コンテンツ
+        self.right_panel_content = ctk.CTkScrollableFrame(self.right_panel_frame, fg_color="transparent")
+        self.right_panel_content.pack(fill="both", expand=True, padx=12, pady=12)
+
+        # パネル別コンテンツ
+        builders = {
+            "settings": self._build_settings_panel,
+            "dictionary": self._build_dictionary_panel,
+            "participants": self._build_participants_panel,
+            "resources": self._build_resources_panel,
+        }
+        builder = builders.get(panel_id)
+        if builder:
+            builder(self.right_panel_content)
+
+    def _close_right_panel(self):
+        """右パネルを閉じる"""
+        if self.right_panel_frame:
+            self.right_panel_frame.destroy()
+            self.right_panel_frame = None
+            self.right_panel_content = None
+        self.active_panel = None
+        self._update_nav_button_states()
+
+    def _update_nav_button_states(self):
+        """ナビゲーションボタンの選択状態を更新"""
+        for pid, btn in self.nav_buttons.items():
+            if pid == self.active_panel:
+                btn.configure(fg_color=ACCENT + "20" if len(ACCENT) == 7 else ACCENT, text_color=ACCENT)
+            else:
+                btn.configure(fg_color="transparent", text_color="#FFFFFF")
+
+    def _add_panel_section(self, parent, title):
+        """パネルセクションタイトルを追加"""
+        ctk.CTkLabel(parent, text=title.upper(), font=("Segoe UI Semibold", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(0, 8))
+
+    def _add_panel_divider(self, parent):
+        """パネル区切り線を追加"""
+        ctk.CTkFrame(parent, height=1, fg_color=BORDER).pack(fill="x", pady=12)
+
+    def _build_settings_panel(self, parent):
+        """設定パネルのコンテンツ"""
+        # API設定
+        self._add_panel_section(parent, "API設定")
+
+        ctk.CTkLabel(parent, text="DeepL API Key", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w")
+        ctk.CTkEntry(parent, textvariable=self.deepl_key, show="*", height=32).pack(fill="x", pady=(0, 4))
+        ctk.CTkButton(parent, text="↗ DeepL API登録", command=lambda: webbrowser.open("https://www.deepl.com/pro-api"),
+                      fg_color="transparent", text_color=ACCENT_SECONDARY, anchor="w", height=24).pack(anchor="w")
+
+        ctk.CTkLabel(parent, text="Gladia API Key", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(8, 0))
+        ctk.CTkEntry(parent, textvariable=self.gladia_key, show="*", height=32).pack(fill="x", pady=(0, 4))
+
+        ctk.CTkLabel(parent, text="Twitch Client ID", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(8, 0))
+        ctk.CTkEntry(parent, textvariable=self.client_id, show="*", height=32).pack(fill="x", pady=(0, 4))
+
+        self._add_panel_divider(parent)
+
+        # VOICEVOX設定
+        self._add_panel_section(parent, "VOICEVOX設定")
+        ctk.CTkLabel(parent, text="VOICEVOXパス", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w")
+        path_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        path_frame.pack(fill="x", pady=(0, 4))
+        ctk.CTkEntry(path_frame, textvariable=self.voicevox_path, height=32).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(path_frame, text="参照", command=self.browse_voicevox_path, width=60, height=32).pack(side="right")
+
+        opts = ctk.CTkFrame(parent, fg_color="transparent")
+        opts.pack(fill="x", pady=4)
+        ctk.CTkCheckBox(opts, text="自動起動", variable=self.voicevox_auto_start, font=("Segoe UI", 10)).pack(side="left")
+        ctk.CTkButton(opts, text="接続テスト", command=self.test_voicevox_connection, width=80, height=28).pack(side="left", padx=8)
+
+        self._add_panel_divider(parent)
+
+        # UIテーマ
+        self._add_panel_section(parent, "UIテーマ")
+        theme_names = ["デフォルト（クラシック）", "グラデーション（モダン）", "ミニマル（シンプル・ライトモード）", "サイバーパンク（ゲーミング）"]
+        current_key = self.config.get("ui_theme", "default")
+        display_map = {"default": theme_names[0], "gradient": theme_names[1], "minimal": theme_names[2], "cyberpunk": theme_names[3]}
+        self.ui_theme_var = tk.StringVar(value=display_map.get(current_key, theme_names[0]))
+        ctk.CTkOptionMenu(parent, values=theme_names, variable=self.ui_theme_var, command=self._on_theme_changed, width=280).pack(fill="x", pady=(0, 8))
+
+        self._add_panel_divider(parent)
+
+        # 保存ボタン
+        ctk.CTkButton(parent, text="設定を保存", command=self.save_settings, height=40).pack(fill="x", pady=(8, 0))
+
+    def _build_dictionary_panel(self, parent):
+        """辞書パネルのコンテンツ"""
+        # 読み上げ辞書
+        self._add_panel_section(parent, "読み上げ辞書")
+        ctk.CTkLabel(parent, text="漢字の読み間違いを修正するための辞書", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(0, 4))
+
+        add_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        add_frame.pack(fill="x", pady=(0, 8))
+        self.dict_word_entry = ctk.CTkEntry(add_frame, placeholder_text="単語", height=32, width=100)
+        self.dict_word_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.dict_reading_entry = ctk.CTkEntry(add_frame, placeholder_text="読み", height=32, width=100)
+        self.dict_reading_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(add_frame, text="+", command=self._add_tts_dict_entry, width=32, height=32).pack(side="right")
+
+        self.dict_list_frame = ctk.CTkScrollableFrame(parent, height=120, fg_color=CARD_BG)
+        self.dict_list_frame.pack(fill="x", pady=(0, 8))
+        self._refresh_dict_list()
+
+        self._add_panel_divider(parent)
+
+        # 翻訳フィルター
+        self._add_panel_section(parent, "翻訳フィルター")
+        ctk.CTkLabel(parent, text="含まれると翻訳スキップ", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(0, 4))
+
+        filter_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        filter_frame.pack(fill="x", pady=(0, 8))
+        self.filter_entry = ctk.CTkEntry(filter_frame, placeholder_text="スキップワード", height=32)
+        self.filter_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(filter_frame, text="+", command=self._add_filter_word, width=32, height=32).pack(side="right")
+
+        self.filter_list_frame = ctk.CTkScrollableFrame(parent, height=80, fg_color=CARD_BG)
+        self.filter_list_frame.pack(fill="x", pady=(0, 8))
+        self._refresh_filter_list()
+
+        self._add_panel_divider(parent)
+
+        # 翻訳カスタム辞書
+        self._add_panel_section(parent, "翻訳カスタム辞書")
+        ctk.CTkLabel(parent, text="翻訳前に置換", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(0, 4))
+
+        custom_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        custom_frame.pack(fill="x", pady=(0, 8))
+        self.custom_before_entry = ctk.CTkEntry(custom_frame, placeholder_text="元の文言", height=32, width=100)
+        self.custom_before_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.custom_after_entry = ctk.CTkEntry(custom_frame, placeholder_text="置換後", height=32, width=100)
+        self.custom_after_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(custom_frame, text="+", command=self._add_custom_dict_entry, width=32, height=32).pack(side="right")
+
+        self.custom_list_frame = ctk.CTkScrollableFrame(parent, height=80, fg_color=CARD_BG)
+        self.custom_list_frame.pack(fill="x", pady=(0, 8))
+        self._refresh_custom_dict_list()
+
+    def _build_participants_panel(self, parent):
+        """参加者パネルのコンテンツ"""
+        # 追跡有効化
+        toggle_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        toggle_frame.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(toggle_frame, text="参加者追跡", font=FONT_LABEL).pack(side="left")
+        self.tracking_var = tk.BooleanVar(value=True)
+        ctk.CTkSwitch(toggle_frame, text="", variable=self.tracking_var).pack(side="right")
+
+        self._add_panel_divider(parent)
+
+        # キーワード管理
+        self._add_panel_section(parent, "登録キーワード")
+        kw_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        kw_frame.pack(fill="x", pady=(0, 8))
+        self.keyword_entry = ctk.CTkEntry(kw_frame, placeholder_text="キーワード", height=32)
+        self.keyword_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(kw_frame, text="+", command=self._add_keyword, width=32, height=32).pack(side="right")
+
+        self.keyword_list_frame = ctk.CTkScrollableFrame(parent, height=80, fg_color=CARD_BG)
+        self.keyword_list_frame.pack(fill="x", pady=(0, 8))
+        self._refresh_keyword_list()
+
+        self._add_panel_divider(parent)
+
+        # 参加者リスト
+        count = len(self.tracker.get_participants())
+        self._add_panel_section(parent, f"参加者リスト ({count}人)")
+
+        self.panel_participant_list = ctk.CTkScrollableFrame(parent, height=150, fg_color=CARD_BG)
+        self.panel_participant_list.pack(fill="x", pady=(0, 8))
+        self._refresh_panel_participants()
+
+        # ボタン
+        btn_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        btn_frame.pack(fill="x", pady=(8, 0))
+        ctk.CTkButton(btn_frame, text="📢 リスト送信", command=self.send_participant_list_to_chat, fg_color=ACCENT).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(btn_frame, text="🔄 更新", command=self._refresh_panel_participants, width=60).pack(side="left", padx=4)
+        ctk.CTkButton(btn_frame, text="🗑️", command=self.clear_participants, width=40, fg_color="#EF4444", hover_color="#DC2626").pack(side="right")
+
+    def _build_resources_panel(self, parent):
+        """リソースパネルのコンテンツ"""
+        # 監視トグル
+        toggle_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        toggle_frame.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(toggle_frame, text="監視", font=FONT_LABEL).pack(side="left")
+        self.monitor_var = tk.BooleanVar(value=True)
+        ctk.CTkSwitch(toggle_frame, text="有効", variable=self.monitor_var).pack(side="right", padx=8)
+        self.debug_var = tk.BooleanVar(value=False)
+        ctk.CTkSwitch(toggle_frame, text="デバッグ", variable=self.debug_var).pack(side="right")
+
+        self._add_panel_divider(parent)
+
+        # プロセス情報
+        self._add_panel_section(parent, "プロセス情報")
+        info_grid = ctk.CTkFrame(parent, fg_color="transparent")
+        info_grid.pack(fill="x")
+        info_grid.grid_columnconfigure((0, 1), weight=1)
+
+        self.res_memory_label = ctk.CTkLabel(info_grid, text="メモリ: -- MB", font=("Consolas", 11))
+        self.res_memory_label.grid(row=0, column=0, sticky="w", pady=2)
+        self.res_cpu_label = ctk.CTkLabel(info_grid, text="CPU: --%", font=("Consolas", 11))
+        self.res_cpu_label.grid(row=0, column=1, sticky="w", pady=2)
+        self.res_threads_label = ctk.CTkLabel(info_grid, text="スレッド: --", font=("Consolas", 11))
+        self.res_threads_label.grid(row=1, column=0, sticky="w", pady=2)
+
+        self._add_panel_divider(parent)
+
+        # API使用状況
+        self._add_panel_section(parent, "API使用状況")
+        usage_sec = self.config.get("gladia_usage_seconds", 0)
+        usage_h = usage_sec / 3600
+        self.res_gladia_label = ctk.CTkLabel(parent, text=f"Gladia: {usage_h:.2f}h / 10h", font=("Consolas", 11))
+        self.res_gladia_label.pack(anchor="w", pady=2)
+
+        self._add_panel_divider(parent)
+
+        # 更新ボタン
+        ctk.CTkButton(parent, text="手動更新", command=self._update_resources_panel, height=36).pack(fill="x", pady=(8, 0))
+
+        # 初回更新
+        self._update_resources_panel()
+
+    def _update_resources_panel(self):
+        """リソースパネルの表示を更新"""
+        try:
+            import psutil
+            process = psutil.Process()
+            mem = process.memory_info().rss / 1024 / 1024
+            cpu = process.cpu_percent()
+            threads = process.num_threads()
+
+            if hasattr(self, 'res_memory_label'):
+                self.res_memory_label.configure(text=f"メモリ: {mem:.1f} MB")
+            if hasattr(self, 'res_cpu_label'):
+                self.res_cpu_label.configure(text=f"CPU: {cpu:.1f}%")
+            if hasattr(self, 'res_threads_label'):
+                self.res_threads_label.configure(text=f"スレッド: {threads}")
+        except Exception as e:
+            logger.debug(f"Resource panel update failed: {e}")
+
+    # 辞書パネル用ヘルパー
+    def _add_tts_dict_entry(self):
+        word = self.dict_word_entry.get().strip()
+        reading = self.dict_reading_entry.get().strip()
+        if word and reading:
+            tts_dict = get_dictionary()
+            tts_dict.add(word, reading)
+            self.dict_word_entry.delete(0, "end")
+            self.dict_reading_entry.delete(0, "end")
+            self._refresh_dict_list()
+
+    def _refresh_dict_list(self):
+        if not hasattr(self, 'dict_list_frame'):
+            return
+        for w in self.dict_list_frame.winfo_children():
+            w.destroy()
+        tts_dict = get_dictionary()
+        for word, reading in list(tts_dict.get_all().items())[:15]:
+            row = ctk.CTkFrame(self.dict_list_frame, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            ctk.CTkLabel(row, text=f"{word} → {reading}", font=("Segoe UI", 10)).pack(side="left")
+            ctk.CTkButton(row, text="×", width=24, height=24, command=lambda w=word: self._remove_dict_entry(w)).pack(side="right")
+
+    def _remove_dict_entry(self, word):
+        tts_dict = get_dictionary()
+        tts_dict.remove(word)
+        self._refresh_dict_list()
+
+    def _add_filter_word(self):
+        word = self.filter_entry.get().strip()
+        if word:
+            filters = self.config.get("translation_filters", [])
+            if word not in filters:
+                filters.append(word)
+                self.config["translation_filters"] = filters
+                save_config(self.config)
+                translator.set_translation_filters(filters)
+            self.filter_entry.delete(0, "end")
+            self._refresh_filter_list()
+
+    def _refresh_filter_list(self):
+        if not hasattr(self, 'filter_list_frame'):
+            return
+        for w in self.filter_list_frame.winfo_children():
+            w.destroy()
+        filters = self.config.get("translation_filters", [])
+        for f in filters[:10]:
+            row = ctk.CTkFrame(self.filter_list_frame, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            ctk.CTkLabel(row, text=f, font=("Segoe UI", 10)).pack(side="left")
+            ctk.CTkButton(row, text="×", width=24, height=24, command=lambda f=f: self._remove_filter(f)).pack(side="right")
+
+    def _remove_filter(self, word):
+        filters = self.config.get("translation_filters", [])
+        if word in filters:
+            filters.remove(word)
+            self.config["translation_filters"] = filters
+            save_config(self.config)
+            translator.set_translation_filters(filters)
+        self._refresh_filter_list()
+
+    def _add_custom_dict_entry(self):
+        before = self.custom_before_entry.get().strip()
+        after = self.custom_after_entry.get().strip()
+        if before and after:
+            custom = self.config.get("translation_dictionary", [])
+            custom.append({"before": before, "after": after})
+            self.config["translation_dictionary"] = custom
+            save_config(self.config)
+            translator.set_translation_dictionary(custom)
+            self.custom_before_entry.delete(0, "end")
+            self.custom_after_entry.delete(0, "end")
+            self._refresh_custom_dict_list()
+
+    def _refresh_custom_dict_list(self):
+        if not hasattr(self, 'custom_list_frame'):
+            return
+        for w in self.custom_list_frame.winfo_children():
+            w.destroy()
+        custom = self.config.get("translation_dictionary", [])
+        for i, entry in enumerate(custom[:10]):
+            row = ctk.CTkFrame(self.custom_list_frame, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            ctk.CTkLabel(row, text=f"{entry.get('before', '')} → {entry.get('after', '')}", font=("Segoe UI", 10)).pack(side="left")
+            ctk.CTkButton(row, text="×", width=24, height=24, command=lambda i=i: self._remove_custom_entry(i)).pack(side="right")
+
+    def _remove_custom_entry(self, index):
+        custom = self.config.get("translation_dictionary", [])
+        if 0 <= index < len(custom):
+            custom.pop(index)
+            self.config["translation_dictionary"] = custom
+            save_config(self.config)
+            translator.set_translation_dictionary(custom)
+        self._refresh_custom_dict_list()
+
+    # 参加者パネル用ヘルパー
+    def _add_keyword(self):
+        kw = self.keyword_entry.get().strip()
+        if kw:
+            self.tracker.add_keyword(kw)
+            self.keyword_entry.delete(0, "end")
+            self._refresh_keyword_list()
+
+    def _refresh_keyword_list(self):
+        if not hasattr(self, 'keyword_list_frame'):
+            return
+        for w in self.keyword_list_frame.winfo_children():
+            w.destroy()
+        for kw in self.tracker.keywords[:10]:
+            row = ctk.CTkFrame(self.keyword_list_frame, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            ctk.CTkLabel(row, text=kw, font=("Segoe UI", 10)).pack(side="left")
+            ctk.CTkButton(row, text="×", width=24, height=24, command=lambda k=kw: self._remove_keyword(k)).pack(side="right")
+
+    def _remove_keyword(self, kw):
+        self.tracker.remove_keyword(kw)
+        self._refresh_keyword_list()
+
+    def _refresh_panel_participants(self):
+        if not hasattr(self, 'panel_participant_list'):
+            return
+        for w in self.panel_participant_list.winfo_children():
+            w.destroy()
+        participants = self.tracker.get_participants()
+        for p in participants[:20]:
+            row = ctk.CTkFrame(self.panel_participant_list, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            ctk.CTkLabel(row, text=p.get("name", ""), font=("Segoe UI", 10)).pack(side="left")
+
+    # ========================================
+    # 旧タブビルダー（互換性のため残す - 未使用）
+    # ========================================
 
     def build_main_tab(self):
         surface = ctk.CTkFrame(self.tab_main, fg_color="transparent")
@@ -2364,6 +3087,9 @@ window.onload = function() {{
         threading.Thread(target=self.bot_instance.run, daemon=True).start()
         self.log_message(f"🤖 BOTを起動しました (Channel: {channel})")
         self._set_status(f"BOT稼働中: {channel}", "success")
+        # ヘッダーUI更新
+        self._update_header_bot_button(True)
+        self._update_connection_badge(True)
 
     def stop_bot(self):
         if self.bot_instance:
@@ -2377,6 +3103,10 @@ window.onload = function() {{
             self.stop_auto_send()
             self.log_message("⏸ 自動送信も停止しました")
             self._set_status("BOTを停止しました。", "warn")
+
+        # ヘッダーUI更新
+        self._update_header_bot_button(False)
+        self._update_connection_badge(False)
 
     def cleanup_resources(self):
         """アプリケーション終了時に全てのリソースを解放"""
