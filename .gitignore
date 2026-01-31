@@ -23,6 +23,9 @@ ngrok.exe
 .mcp.json
 .claude/
 
+# User data
+tts_dictionary.json
+
 # Unused
 PENCIL_SETUP.md
 designs/
