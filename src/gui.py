@@ -25,7 +25,7 @@ except Exception as e:
 
 from src.auth import run_auth_server_and_get_token, build_auth_url, validate_token, validate_token_with_info
 from src.bot import TranslateBot
-from src.config import load_config, save_config
+from src.config import load_config, save_config, validate_deepl_api_key, validate_twitch_client_id
 from src.voice_listener import VoiceTranslator
 from src.overlay_server import update_translation, run_server_thread
 from src.logger import logger
@@ -2338,8 +2338,28 @@ class TwitchBotApp:
             logger.error(f"Auto-save failed: {e}", exc_info=True)
 
     def save_settings(self):
+        # バリデーション実行
+        warnings = []
+
+        deepl_key = self.deepl_key.get().strip()
+        if deepl_key:  # 入力がある場合のみチェック
+            valid, msg = validate_deepl_api_key(deepl_key)
+            if not valid:
+                warnings.append(msg)
+
+        client_id = self.client_id.get().strip()
+        if client_id:  # 入力がある場合のみチェック
+            valid, msg = validate_twitch_client_id(client_id)
+            if not valid:
+                warnings.append(msg)
+
+        # 保存は常に実行（警告があっても保存）
         self._auto_save_settings()
-        messagebox.showinfo("保存完了", "設定を config.json に保存しました。")
+
+        if warnings:
+            messagebox.showwarning("設定の警告", "\n".join(warnings) + "\n\n設定は保存されましたが、形式を確認してください。")
+        else:
+            messagebox.showinfo("保存完了", "設定を config.json に保存しました。")
         # 使用状況表示を更新
         self._update_gladia_usage_display()
 
