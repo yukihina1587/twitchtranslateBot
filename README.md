@@ -1,6 +1,6 @@
 # ことつな！ - Twitch翻訳BOT
 
-[![Tests](https://github.com/yukihina1587/twitchtranslateBot/actions/workflows/test.yml/badge.svg)](https://github.com/yukihina1587/twitchtranslateBot/actions/workflows/test.yml)
+[![Tests](https://github.com/yukihina1587/kototsuna-bot/actions/workflows/test.yml/badge.svg)](https://github.com/yukihina1587/kototsuna-bot/actions/workflows/test.yml)
 
 Twitchのチャットメッセージをリアルタイムで翻訳するBOTです。DeepL APIを利用した高品質な翻訳と、VOICEVOXによる読み上げ機能を搭載しています。
 
