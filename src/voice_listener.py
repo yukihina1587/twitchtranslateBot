@@ -19,16 +19,40 @@ except ImportError:
     logger.warning("websockets not installed. Only Google SR will be available.")
 
 class VoiceTranslator:
-    def __init__(self, mode_getter, api_key_getter, callback, config_data=None):
+    # ステレオミキサーを除外するためのキーワード
+    STEREO_MIX_KEYWORDS = ['stereo mix', 'ステレオ ミキサー', 'ステレオミキサー', 'what u hear', 'wave out']
+
+    @staticmethod
+    def get_microphone_devices() -> list:
+        """
+        利用可能なマイクデバイス一覧を取得（ステレオミキサー除外）
+        Returns: [{'index': int, 'name': str}, ...]
+        """
+        devices = []
+        try:
+            device_names = sr.Microphone.list_microphone_names()
+            for index, name in enumerate(device_names):
+                # ステレオミキサーを除外
+                name_lower = name.lower()
+                is_stereo_mix = any(keyword in name_lower for keyword in VoiceTranslator.STEREO_MIX_KEYWORDS)
+                if not is_stereo_mix:
+                    devices.append({'index': index, 'name': name})
+        except Exception as e:
+            logger.error(f"Failed to get microphone devices: {e}")
+        return devices
+
+    def __init__(self, mode_getter, api_key_getter, callback, config_data=None, device_index=None):
         """
         mode_getter: Function returning current translation mode ('英→日', etc.)
         api_key_getter: Function returning DeepL API Key
         callback: Function(text, translated_text) to handle result
         config_data: Configuration dictionary (for Gladia settings)
+        device_index: Microphone device index (None for default)
         """
         self.r = sr.Recognizer()
         # マイクの初期化は起動時に行うと固まることがあるため遅延させる
         self.mic = None
+        self.device_index = device_index
         self.mode_getter = mode_getter
         self.api_key_getter = api_key_getter
         self.callback = callback
@@ -76,11 +100,12 @@ class VoiceTranslator:
     def _start_google_sr(self):
         """Google Speech Recognitionを開始"""
         try:
-            logger.info("Starting Google Speech Recognition...")
+            logger.info(f"Starting Google Speech Recognition... (device_index={self.device_index})")
             # マイクの初期化が重い環境があるためここで遅延初期化する
             if self.mic is None:
                 try:
-                    self.mic = sr.Microphone()
+                    self.mic = sr.Microphone(device_index=self.device_index)
+                    logger.info(f"Microphone initialized with device_index={self.device_index}")
                 except OSError as e:
                     logger.error(f"Failed to access microphone: {e}", exc_info=True)
                     return False
@@ -143,11 +168,12 @@ class VoiceTranslator:
 
             logger.info("Gladia: Initializing PyAudio")
             p = pyaudio.PyAudio()
-            logger.info("Gladia: Opening microphone stream")
+            logger.info(f"Gladia: Opening microphone stream (device_index={self.device_index})")
             stream = p.open(format=FORMAT,
                           channels=CHANNELS,
                           rate=RATE,
                           input=True,
+                          input_device_index=self.device_index,
                           frames_per_buffer=CHUNK)
 
             logger.info("Gladia: Microphone stream opened.")

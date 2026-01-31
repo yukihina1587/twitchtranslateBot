@@ -6,7 +6,7 @@ import time
 from src.logger import logger
 
 REDIRECT_URI = 'http://localhost:8787/redirect.html'
-SCOPES = ['chat:read', 'chat:edit']
+SCOPES = ['chat:read', 'chat:edit', 'moderator:read:followers']
 
 token_result = {}
 
@@ -115,6 +115,21 @@ def validate_token(access_token, max_retries=2):
     """
     Twitch APIでアクセストークンの有効性を検証する
     ネットワークエラー時は自動リトライ
+
+    Returns:
+        bool: トークンが有効かどうか
+    """
+    result = validate_token_with_info(access_token, max_retries)
+    return result is not None
+
+
+def validate_token_with_info(access_token, max_retries=2):
+    """
+    Twitch APIでアクセストークンの有効性を検証し、ユーザー情報を返す
+    ネットワークエラー時は自動リトライ
+
+    Returns:
+        dict or None: 有効な場合はユーザー情報（login, user_id等）、無効な場合はNone
     """
     token = access_token
     if token.startswith("oauth:"):
@@ -131,22 +146,27 @@ def validate_token(access_token, max_retries=2):
             if response.status_code == 200:
                 data = response.json()
                 logger.info(f"Token is valid. User: {data.get('login', 'unknown')}, Expires in: {data.get('expires_in', 0)}s")
-                return True
+                return {
+                    'login': data.get('login', ''),
+                    'user_id': data.get('user_id', ''),
+                    'expires_in': data.get('expires_in', 0),
+                    'scopes': data.get('scopes', [])
+                }
             else:
                 logger.warning(f"Token validation failed: {response.status_code}")
-                return False
+                return None
 
         except requests.exceptions.Timeout:
             logger.warning(f"Token validation timeout (attempt {attempt + 1}/{max_retries + 1})")
             if attempt < max_retries:
                 time.sleep(1)
                 continue
-            return False
+            return None
         except Exception as e:
             logger.error(f"Failed to validate token: {e}")
             if attempt < max_retries:
                 time.sleep(1)
                 continue
-            return False
+            return None
 
-    return False
+    return None

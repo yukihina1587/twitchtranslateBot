@@ -10,6 +10,7 @@ DEFAULT_CONFIG = {
     "twitch_access_token": "",  # 保存されたアクセストークン（自動ログイン用）
     "deepl_api_key": "",
     "channel_name": "",
+    "channel_mode": "manual",  # auto: 認証アカウントと同じ, manual: 手動入力
     "translate_mode": "自動",
     "voicevox_url": "http://localhost:50021",
     "voicevox_speaker_id": 14,  # 冥鳴ひまり (Meimei Himari)
@@ -22,7 +23,13 @@ DEFAULT_CONFIG = {
     "stt_provider": "gladia",  # 音声認識プロバイダー: "gladia" または "google"
     # イベント効果音
     "bits_sound_path": "",
-    "subscription_sound_path": "",
+    "bits_sound_volume": 80,
+    "subscription_sound_path": "",  # 自分でサブスク
+    "subscription_sound_volume": 80,
+    "gift_sub_sound_path": "",  # ギフトサブ
+    "gift_sub_sound_volume": 80,
+    "follow_sound_path": "",  # フォロー
+    "follow_sound_volume": 80,
     # 翻訳フィルタとカスタム辞書
     "translation_filters": [],
     "translation_dictionary": [],  # [{ "source": "原文", "target": "置換後" }]
@@ -40,6 +47,7 @@ DEFAULT_CONFIG = {
 
 VALID_TRANSLATE_MODES = {"自動", "英→日", "日→英"}
 VALID_UI_THEMES = {"default", "gradient", "minimal", "cyberpunk"}
+VALID_CHANNEL_MODES = {"auto", "manual"}
 
 def validate_config(config_data):
     """
@@ -62,6 +70,12 @@ def validate_config(config_data):
         validated["ui_theme"] = "default"
         changed = True
 
+    # channel_mode
+    if validated.get("channel_mode") not in VALID_CHANNEL_MODES:
+        logger.warning(f"channel_mode is invalid: {validated.get('channel_mode')}, fallback to manual")
+        validated["channel_mode"] = "manual"
+        changed = True
+
     # ブール値はbool化
     for key in ["voicevox_auto_start"]:
         if not isinstance(validated.get(key), bool):
@@ -74,6 +88,7 @@ def validate_config(config_data):
         "twitch_access_token",
         "deepl_api_key",
         "channel_name",
+        "channel_mode",
         "voicevox_url",
         "voicevox_engine_path",
         "gladia_api_key",
@@ -81,6 +96,8 @@ def validate_config(config_data):
         "stt_provider",
         "bits_sound_path",
         "subscription_sound_path",
+        "gift_sub_sound_path",
+        "follow_sound_path",
         "comment_log_bg",
         "comment_log_fg",
         "comment_log_font",

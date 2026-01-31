@@ -21,7 +21,9 @@ ngrok.exe
 # Claude Code / MCP
 .claude.json
 .mcp.json
+.claude/
 
 # Unused
 PENCIL_SETUP.md
 designs/
+bgm/

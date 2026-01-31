@@ -10,6 +10,8 @@ from src.logger import logger
 
 DEEPL_FREE_ENDPOINT = "https://api-free.deepl.com/v2/translate"
 DEEPL_PRO_ENDPOINT = "https://api.deepl.com/v2/translate"
+DEEPL_FREE_USAGE_ENDPOINT = "https://api-free.deepl.com/v2/usage"
+DEEPL_PRO_USAGE_ENDPOINT = "https://api.deepl.com/v2/usage"
 
 # キャッシュ設定
 CACHE_MAX_ENTRIES = 500
@@ -26,6 +28,50 @@ def get_deepl_endpoint(api_key):
     if api_key and api_key.strip().endswith(":fx"):
         return DEEPL_FREE_ENDPOINT
     return DEEPL_PRO_ENDPOINT
+
+
+def get_deepl_usage_endpoint(api_key):
+    """APIキーに基づいて適切な使用量エンドポイントを返す"""
+    if api_key and api_key.strip().endswith(":fx"):
+        return DEEPL_FREE_USAGE_ENDPOINT
+    return DEEPL_PRO_USAGE_ENDPOINT
+
+
+def get_deepl_usage(api_key: str) -> dict:
+    """
+    DeepL APIの使用状況を取得する
+
+    Returns:
+        dict: {
+            'character_count': int,  # 使用文字数
+            'character_limit': int,  # 上限文字数
+            'error': str or None     # エラーメッセージ（あれば）
+        }
+    """
+    if not api_key or not api_key.strip():
+        return {'character_count': 0, 'character_limit': 0, 'error': 'APIキー未設定'}
+
+    endpoint = get_deepl_usage_endpoint(api_key)
+    headers = {"Authorization": f"DeepL-Auth-Key {api_key}"}
+
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                'character_count': data.get('character_count', 0),
+                'character_limit': data.get('character_limit', 0),
+                'error': None
+            }
+        elif response.status_code == 403:
+            return {'character_count': 0, 'character_limit': 0, 'error': 'APIキーが無効'}
+        else:
+            return {'character_count': 0, 'character_limit': 0, 'error': f'API Error: {response.status_code}'}
+    except requests.exceptions.Timeout:
+        return {'character_count': 0, 'character_limit': 0, 'error': 'タイムアウト'}
+    except Exception as e:
+        logger.error(f"DeepL usage API error: {e}")
+        return {'character_count': 0, 'character_limit': 0, 'error': str(e)}
 
 
 def _is_japanese(text):

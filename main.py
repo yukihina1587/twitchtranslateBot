@@ -2,6 +2,7 @@ import sys
 import io
 import os
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
+os.environ['QT_LOGGING_RULES'] = '*.debug=false;qt.qpa.*=false'  # Qt DPI警告を抑制
 import tkinter as tk
 from dotenv import load_dotenv
 

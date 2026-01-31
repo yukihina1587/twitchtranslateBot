@@ -631,7 +631,10 @@ class VoicevoxTTS:
     def start(self):
         """Start TTS service"""
         logger.info("=== TTS起動プロセス開始 ===")
-        logger.info(f"VOICEVOX可用性: {self.voicevox_available}")
+
+        # VOICEVOXの可用性を再チェック（起動時に利用不可でも、今は利用可能かもしれない）
+        self.voicevox_available = self._check_voicevox_availability()
+        logger.info(f"VOICEVOX可用性（再チェック）: {self.voicevox_available}")
         logger.info(f"pygame imported: {PYGAME_IMPORTED}")
         logger.info(f"pyttsx3 available: {PYTTSX3_AVAILABLE}")
 

@@ -23,7 +23,7 @@ except Exception as e:
     pygame = None
     PYGAME_AVAILABLE = False
 
-from src.auth import run_auth_server_and_get_token, build_auth_url, validate_token
+from src.auth import run_auth_server_and_get_token, build_auth_url, validate_token, validate_token_with_info
 from src.bot import TranslateBot
 from src.config import load_config, save_config
 from src.voice_listener import VoiceTranslator
@@ -169,8 +169,16 @@ class TwitchBotApp:
 
         # Variables
         self.channel = tk.StringVar(value=self.config.get("channel_name", ""))
+        # チャンネル設定モード: "auto"=認証アカウントと同じ, "manual"=手動入力
+        self.channel_mode = tk.StringVar(value=self.config.get("channel_mode", "manual"))
+        # 認証済みユーザー名（トークン検証時に取得）
+        self.auth_username = tk.StringVar(value="")
         self.lang_mode = tk.StringVar(value=self.config.get("translate_mode", "自動"))
-        self.chat_translation_enabled = tk.BooleanVar(value=self.config.get("chat_translation_enabled", True))
+        # チャット翻訳は毎回オフから開始（安全のため）
+        self.chat_translation_enabled = tk.BooleanVar(value=False)
+        # config.jsonにも反映して、bot.pyと同期させる
+        self.config["chat_translation_enabled"] = False
+        save_config(self.config)
         self.client_id = tk.StringVar(value=self.config.get("twitch_client_id", ""))
         self.deepl_key = tk.StringVar(value=self.config.get("deepl_api_key", ""))
         self.gladia_key = tk.StringVar(value=self.config.get("gladia_api_key", ""))
@@ -180,9 +188,13 @@ class TwitchBotApp:
         self.voicevox_speaker_name = tk.StringVar(value=self.config.get("voicevox_speaker_name", "冥鳴ひまり / ノーマル"))
         self.voicevox_speakers_cache = []  # スピーカー一覧キャッシュ
         self.bits_sound_path = tk.StringVar(value=self.config.get("bits_sound_path", ""))
-        self.sub_sound_path = tk.StringVar(value=self.config.get("subscription_sound_path", ""))
         self.bits_volume_var = tk.DoubleVar(value=self.config.get("bits_sound_volume", 80))
+        self.sub_sound_path = tk.StringVar(value=self.config.get("subscription_sound_path", ""))
         self.sub_volume_var = tk.DoubleVar(value=self.config.get("subscription_sound_volume", 80))
+        self.gift_sub_sound_path = tk.StringVar(value=self.config.get("gift_sub_sound_path", ""))
+        self.gift_sub_volume_var = tk.DoubleVar(value=self.config.get("gift_sub_sound_volume", 80))
+        self.follow_sound_path = tk.StringVar(value=self.config.get("follow_sound_path", ""))
+        self.follow_volume_var = tk.DoubleVar(value=self.config.get("follow_sound_volume", 80))
         # コメントログカスタム
         self.comment_bg = tk.StringVar(value=self.config.get("comment_log_bg", "#0E1728"))
         self.comment_fg = tk.StringVar(value=self.config.get("comment_log_fg", "#E8F0FF"))
@@ -200,6 +212,9 @@ class TwitchBotApp:
         self._setup_auto_save()
         # 参加者タブ自動更新用
         self.participant_tab_refresh_timer = None
+        # 参加者リスト自動送信用
+        self.auto_send_var = tk.BooleanVar(value=False)
+        self.auto_send_timer = None
 
         # === 新レイアウト用の状態変数 ===
         self.active_panel = None  # "settings" | "dictionary" | "participants" | "resources" | None
@@ -212,11 +227,13 @@ class TwitchBotApp:
         self.tts_include_name_var = tk.BooleanVar(value=self.config.get("tts_include_name", False))  # 名前読み上げ
 
         # 音声翻訳クラスの初期化
+        mic_device_index = self.config.get("mic_device_index", None)
         self.voice_translator = VoiceTranslator(
             mode_getter=lambda: self.lang_mode.get(),
             api_key_getter=lambda: self.deepl_key.get(),
             callback=self.voice_callback,
-            config_data=self.config
+            config_data=self.config,
+            device_index=mic_device_index
         )
 
         # TTS (Text-to-Speech) の初期化
@@ -247,6 +264,8 @@ class TwitchBotApp:
         if self.chat_html_output.get():
             self.master.after(500, self._open_chat_html_window)
 
+        # 起動時はBOTボタンを無効化（認証前）
+        self.master.after(100, lambda: self._update_auth_button_states(authenticated=False))
         # 起動時に保存されたトークンをチェックして自動ログイン
         self.master.after(1000, self._check_saved_token)
 
@@ -368,35 +387,42 @@ class TwitchBotApp:
         )
         self.header_stats_label.pack(side="left")
 
-        # === 右側: チャンネル入力 + ボタン群 ===
+        # === 右側: チャンネル表示 + ボタン群 ===
         right = ctk.CTkFrame(inner, fg_color="transparent")
         right.grid(row=0, column=2, sticky="e")
 
-        ctk.CTkEntry(
-            right, textvariable=self.channel, placeholder_text="チャンネル名",
-            width=140, height=32, fg_color=PANEL_BG, border_color=BORDER
-        ).pack(side="left", padx=(0, 8))
-
-        self.start_stop_btn = ctk.CTkButton(
-            right, text="▶ 開始", command=self._toggle_bot_from_header,
-            width=80, height=32, fg_color=ACCENT, hover_color="#16A34A", text_color="#0B1220"
+        # チャンネル表示（クリックで設定画面にフォーカス）
+        channel_display = ctk.CTkFrame(right, fg_color=PANEL_BG, corner_radius=8, border_width=1, border_color=BORDER)
+        channel_display.pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(channel_display, text="📺", font=("Segoe UI", 12), width=24).pack(side="left", padx=(8, 0))
+        self.header_channel_label = ctk.CTkLabel(
+            channel_display, textvariable=self.channel, font=("Segoe UI", 11),
+            text_color=TEXT_SUBTLE, width=140, anchor="w"
         )
-        self.start_stop_btn.pack(side="left", padx=(0, 8))
+        self.header_channel_label.pack(side="left", padx=(4, 8), pady=6)
+        # チャンネル未設定時のプレースホルダー表示を更新するためのトレース
+        self.channel.trace_add("write", self._update_channel_display)
 
-        ctk.CTkFrame(right, width=1, height=24, fg_color=BORDER).pack(side="left", padx=8)
-
+        # ボタン順序: 認証 → 開始 → 停止（操作フローに合わせた順序）
         self.auth_btn = ctk.CTkButton(
-            right, text="🔑 認証", command=self.start_auth,
-            width=70, height=32,
+            right, text="① Twitch認証", command=self.start_auth,
+            width=110, height=32,
             fg_color="#0891B2", hover_color="#0E7490",
             text_color="#FFFFFF"
         )
-        self.auth_btn.pack(side="left", padx=2)
+        self.auth_btn.pack(side="left", padx=(0, 6))
 
-        ctk.CTkButton(
-            right, text="⏹ 切断", command=self.disconnect_all, width=70, height=32,
+        self.start_stop_btn = ctk.CTkButton(
+            right, text="② BOT開始", command=self._toggle_bot_from_header,
+            width=100, height=32, fg_color=ACCENT, hover_color="#16A34A", text_color="#0B1220"
+        )
+        self.start_stop_btn.pack(side="left", padx=(0, 6))
+
+        self.disconnect_btn = ctk.CTkButton(
+            right, text="⏹ 全停止", command=self.disconnect_all, width=80, height=32,
             fg_color="#DC2626", hover_color="#B91C1C", text_color="#FFFFFF"
-        ).pack(side="left", padx=2)
+        )
+        self.disconnect_btn.pack(side="left")
 
         # サブタイトル
         subtitle = ctk.CTkFrame(self.main_frame, fg_color="transparent", height=20)
@@ -408,17 +434,27 @@ class TwitchBotApp:
 
     def _toggle_bot_from_header(self):
         """ヘッダーの開始/停止ボタンのハンドラー"""
-        if self.bot_instance is None or not getattr(self.bot_instance, 'running', False):
-            self.start_bot()
-        else:
-            self.stop_bot()
+        # 二重実行防止
+        if hasattr(self, '_bot_toggling') and self._bot_toggling:
+            logger.debug("Bot toggle already in progress, ignoring")
+            return
+        self._bot_toggling = True
+
+        try:
+            if self.bot_instance is None:
+                self.start_bot()
+            else:
+                self.stop_bot()
+        finally:
+            # 少し遅延させてフラグをリセット（連打防止）
+            self.master.after(500, lambda: setattr(self, '_bot_toggling', False))
 
     def _update_header_bot_button(self, running: bool):
         """ヘッダーの開始/停止ボタンの表示を更新"""
         if running:
-            self.start_stop_btn.configure(text="■ 停止", fg_color="#EF4444", hover_color="#DC2626", text_color="#FFFFFF")
+            self.start_stop_btn.configure(text="■ BOT停止", fg_color="#EF4444", hover_color="#DC2626", text_color="#FFFFFF")
         else:
-            self.start_stop_btn.configure(text="▶ 開始", fg_color=ACCENT, hover_color="#16A34A", text_color="#0B1220")
+            self.start_stop_btn.configure(text="② BOT開始", fg_color=ACCENT, hover_color="#16A34A", text_color="#0B1220")
 
     def _update_connection_badge(self, connected: bool):
         """接続バッジの表示を更新"""
@@ -448,7 +484,7 @@ class TwitchBotApp:
 
         self._add_sidebar_toggle(scroll, "チャット翻訳", self.chat_translation_enabled, self._on_translation_toggle_changed)
         self._add_sidebar_toggle(scroll, "名前も読み上げ", self.tts_include_name_var, None)
-        self._add_sidebar_toggle(scroll, "🎤 声→翻訳チャット", self.voice_var, self.toggle_voice)
+        self._add_sidebar_toggle(scroll, "声→翻訳チャット", self.voice_var, self.toggle_voice)
 
         # === 音量・速度スライダー ===
         self._add_sidebar_slider(scroll, "音量", self.tts_volume_var, 0, 100, "%")
@@ -545,6 +581,42 @@ class TwitchBotApp:
         """サブスク効果音の音量ラベルを更新"""
         if hasattr(self, 'sub_vol_label'):
             self.sub_vol_label.configure(text=f"{int(self.sub_volume_var.get())}%")
+
+    def _update_gift_sub_vol_label(self):
+        """ギフトサブ効果音の音量ラベルを更新"""
+        if hasattr(self, 'gift_sub_vol_label'):
+            self.gift_sub_vol_label.configure(text=f"{int(self.gift_sub_volume_var.get())}%")
+
+    def _update_follow_vol_label(self):
+        """フォロー効果音の音量ラベルを更新"""
+        if hasattr(self, 'follow_vol_label'):
+            self.follow_vol_label.configure(text=f"{int(self.follow_volume_var.get())}%")
+
+    def _update_channel_display(self, *args):
+        """チャンネル表示を更新"""
+        if hasattr(self, 'header_channel_label'):
+            channel = self.channel.get().strip()
+            if channel:
+                self.header_channel_label.configure(text_color="#E8F0FF")
+            else:
+                self.header_channel_label.configure(text_color=TEXT_SUBTLE)
+                # プレースホルダー的に表示
+                self.channel.set("")
+
+    def _on_channel_mode_change(self, *args):
+        """チャンネルモード変更時の処理"""
+        mode = self.channel_mode.get()
+        if mode == "auto":
+            # 認証アカウントと同じチャンネルを使用
+            if self.auth_username.get():
+                self.channel.set(self.auth_username.get())
+            # 手動入力を無効化
+            if hasattr(self, 'channel_entry'):
+                self.channel_entry.configure(state="disabled")
+        else:
+            # 手動入力を有効化
+            if hasattr(self, 'channel_entry'):
+                self.channel_entry.configure(state="normal")
 
     def _copy_log_to_clipboard(self):
         """ログをクリップボードにコピー"""
@@ -718,6 +790,63 @@ class TwitchBotApp:
 
     def _build_settings_panel(self, parent):
         """設定パネルのコンテンツ"""
+        # Twitch接続設定
+        self._add_panel_section(parent, "TWITCH接続")
+
+        # 認証アカウント表示
+        auth_frame = ctk.CTkFrame(parent, fg_color=PANEL_BG, corner_radius=8)
+        auth_frame.pack(fill="x", pady=(0, 8))
+        auth_inner = ctk.CTkFrame(auth_frame, fg_color="transparent")
+        auth_inner.pack(fill="x", padx=8, pady=6)
+        auth_inner.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(auth_inner, text="認証:", font=("Segoe UI", 11), text_color=TEXT_SUBTLE).grid(row=0, column=0, sticky="w")
+        self.auth_account_label = ctk.CTkLabel(auth_inner, text="未認証", font=("Segoe UI Semibold", 11), text_color=ACCENT_WARN)
+        self.auth_account_label.grid(row=0, column=1, sticky="w", padx=(4, 0))
+
+        self.switch_account_btn = ctk.CTkButton(
+            auth_inner, text="認証", width=60, height=26,
+            font=("Segoe UI", 10), fg_color=ACCENT_SECONDARY, hover_color="#1EA4D8",
+            command=self._switch_account
+        )
+        self.switch_account_btn.grid(row=0, column=2, sticky="e")
+
+        # チャンネル設定
+        ctk.CTkLabel(parent, text="配信チャンネル", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(4, 0))
+
+        # ラジオボタン: 認証アカウントと同じ
+        self.channel_auto_radio = ctk.CTkRadioButton(
+            parent, text="認証アカウントと同じ",
+            variable=self.channel_mode, value="auto",
+            font=("Segoe UI", 11), command=self._on_channel_mode_change
+        )
+        self.channel_auto_radio.pack(anchor="w", pady=2)
+
+        # ラジオボタン + 入力欄
+        manual_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        manual_frame.pack(fill="x", pady=2)
+
+        self.channel_manual_radio = ctk.CTkRadioButton(
+            manual_frame, text="別のチャンネル:",
+            variable=self.channel_mode, value="manual",
+            font=("Segoe UI", 11), command=self._on_channel_mode_change
+        )
+        self.channel_manual_radio.pack(side="left")
+
+        self.channel_entry = ctk.CTkEntry(
+            manual_frame, textvariable=self.channel,
+            placeholder_text="チャンネル名", height=28, width=120
+        )
+        self.channel_entry.pack(side="left", padx=(8, 0), fill="x", expand=True)
+
+        ctk.CTkLabel(parent, text="※ twitch.tv/○○○ の ○○○ 部分", font=("Segoe UI", 9), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(0, 4))
+
+        # 初期状態
+        if self.channel_mode.get() == "auto":
+            self.channel_entry.configure(state="disabled")
+
+        self._add_panel_divider(parent)
+
         # API設定
         self._add_panel_section(parent, "API設定")
 
@@ -729,8 +858,21 @@ class TwitchBotApp:
         ctk.CTkLabel(parent, text="Gladia API Key", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(8, 0))
         ctk.CTkEntry(parent, textvariable=self.gladia_key, show="*", height=32).pack(fill="x", pady=(0, 4))
 
-        ctk.CTkLabel(parent, text="Twitch Client ID", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(8, 0))
-        ctk.CTkEntry(parent, textvariable=self.client_id, show="*", height=32).pack(fill="x", pady=(0, 4))
+        # マイク選択
+        ctk.CTkLabel(parent, text="マイク選択（ステレオミキサー除外済み）", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(8, 0))
+        mic_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        mic_frame.pack(fill="x", pady=(0, 4))
+        self.mic_device_var = tk.StringVar(value=self.config.get("mic_device_name", "デフォルト"))
+        self.mic_selector = ctk.CTkOptionMenu(mic_frame, variable=self.mic_device_var, values=["デフォルト"], width=220, command=self._on_mic_selected)
+        self.mic_selector.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(mic_frame, text="🔄", command=self._refresh_mic_list, width=32, height=28).pack(side="left")
+        # 初期化時にマイクリストを取得
+        self.master.after(500, self._refresh_mic_list)
+
+        ctk.CTkLabel(parent, text="Twitch Client ID（Twitchアプリ登録で取得）", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(8, 0))
+        ctk.CTkEntry(parent, textvariable=self.client_id, height=32).pack(fill="x", pady=(0, 4))
+        ctk.CTkButton(parent, text="↗ Twitchデベロッパー登録", command=lambda: webbrowser.open("https://dev.twitch.tv/console/apps"),
+                      fg_color="transparent", text_color=ACCENT_SECONDARY, anchor="w", height=24).pack(anchor="w")
 
         self._add_panel_divider(parent)
 
@@ -803,35 +945,61 @@ class TwitchBotApp:
         # イベント効果音
         self._add_panel_section(parent, "イベント効果音")
 
-        ctk.CTkLabel(parent, text="Bits効果音", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w")
+        # Bits効果音
+        ctk.CTkLabel(parent, text="💎 Bits効果音", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w")
         bits_frame = ctk.CTkFrame(parent, fg_color="transparent")
         bits_frame.pack(fill="x", pady=(0, 4))
         ctk.CTkEntry(bits_frame, textvariable=self.bits_sound_path, height=32).pack(side="left", fill="x", expand=True, padx=(0, 4))
         ctk.CTkButton(bits_frame, text="参照", command=lambda: self.select_event_sound("bits"), width=50, height=32).pack(side="left", padx=(0, 4))
         ctk.CTkButton(bits_frame, text="再生", command=lambda: self.play_event_sound("bits"), width=50, height=32, fg_color="#2e8b57", hover_color="#236b43").pack(side="left")
-
-        # Bits音量スライダー
         bits_vol_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        bits_vol_frame.pack(fill="x", pady=(0, 8))
+        bits_vol_frame.pack(fill="x", pady=(0, 6))
         ctk.CTkLabel(bits_vol_frame, text="音量", font=("Segoe UI", 10), text_color=TEXT_SUBTLE, width=40).pack(side="left")
         ctk.CTkSlider(bits_vol_frame, from_=0, to=100, variable=self.bits_volume_var, width=200, command=lambda v: self._update_bits_vol_label()).pack(side="left", fill="x", expand=True, padx=4)
         self.bits_vol_label = ctk.CTkLabel(bits_vol_frame, text=f"{int(self.bits_volume_var.get())}%", font=("Consolas", 10), width=40)
         self.bits_vol_label.pack(side="right")
 
-        ctk.CTkLabel(parent, text="サブスク効果音", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(8, 0))
+        # サブスク効果音（自分で登録）
+        ctk.CTkLabel(parent, text="⭐ サブスク効果音", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(6, 0))
         sub_frame = ctk.CTkFrame(parent, fg_color="transparent")
         sub_frame.pack(fill="x", pady=(0, 4))
         ctk.CTkEntry(sub_frame, textvariable=self.sub_sound_path, height=32).pack(side="left", fill="x", expand=True, padx=(0, 4))
         ctk.CTkButton(sub_frame, text="参照", command=lambda: self.select_event_sound("subscription"), width=50, height=32).pack(side="left", padx=(0, 4))
         ctk.CTkButton(sub_frame, text="再生", command=lambda: self.play_event_sound("subscription"), width=50, height=32, fg_color="#2e8b57", hover_color="#236b43").pack(side="left")
-
-        # サブスク音量スライダー
         sub_vol_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        sub_vol_frame.pack(fill="x", pady=(0, 8))
+        sub_vol_frame.pack(fill="x", pady=(0, 6))
         ctk.CTkLabel(sub_vol_frame, text="音量", font=("Segoe UI", 10), text_color=TEXT_SUBTLE, width=40).pack(side="left")
         ctk.CTkSlider(sub_vol_frame, from_=0, to=100, variable=self.sub_volume_var, width=200, command=lambda v: self._update_sub_vol_label()).pack(side="left", fill="x", expand=True, padx=4)
         self.sub_vol_label = ctk.CTkLabel(sub_vol_frame, text=f"{int(self.sub_volume_var.get())}%", font=("Consolas", 10), width=40)
         self.sub_vol_label.pack(side="right")
+
+        # ギフトサブ効果音
+        ctk.CTkLabel(parent, text="🎁 ギフトサブ効果音", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(6, 0))
+        gift_sub_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        gift_sub_frame.pack(fill="x", pady=(0, 4))
+        ctk.CTkEntry(gift_sub_frame, textvariable=self.gift_sub_sound_path, height=32).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(gift_sub_frame, text="参照", command=lambda: self.select_event_sound("gift_sub"), width=50, height=32).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(gift_sub_frame, text="再生", command=lambda: self.play_event_sound("gift_sub"), width=50, height=32, fg_color="#2e8b57", hover_color="#236b43").pack(side="left")
+        gift_sub_vol_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        gift_sub_vol_frame.pack(fill="x", pady=(0, 6))
+        ctk.CTkLabel(gift_sub_vol_frame, text="音量", font=("Segoe UI", 10), text_color=TEXT_SUBTLE, width=40).pack(side="left")
+        ctk.CTkSlider(gift_sub_vol_frame, from_=0, to=100, variable=self.gift_sub_volume_var, width=200, command=lambda v: self._update_gift_sub_vol_label()).pack(side="left", fill="x", expand=True, padx=4)
+        self.gift_sub_vol_label = ctk.CTkLabel(gift_sub_vol_frame, text=f"{int(self.gift_sub_volume_var.get())}%", font=("Consolas", 10), width=40)
+        self.gift_sub_vol_label.pack(side="right")
+
+        # フォロー効果音
+        ctk.CTkLabel(parent, text="💚 フォロー効果音", font=("Segoe UI", 10), text_color=TEXT_SUBTLE).pack(anchor="w", pady=(6, 0))
+        follow_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        follow_frame.pack(fill="x", pady=(0, 4))
+        ctk.CTkEntry(follow_frame, textvariable=self.follow_sound_path, height=32).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(follow_frame, text="参照", command=lambda: self.select_event_sound("follow"), width=50, height=32).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(follow_frame, text="再生", command=lambda: self.play_event_sound("follow"), width=50, height=32, fg_color="#2e8b57", hover_color="#236b43").pack(side="left")
+        follow_vol_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        follow_vol_frame.pack(fill="x", pady=(0, 6))
+        ctk.CTkLabel(follow_vol_frame, text="音量", font=("Segoe UI", 10), text_color=TEXT_SUBTLE, width=40).pack(side="left")
+        ctk.CTkSlider(follow_vol_frame, from_=0, to=100, variable=self.follow_volume_var, width=200, command=lambda v: self._update_follow_vol_label()).pack(side="left", fill="x", expand=True, padx=4)
+        self.follow_vol_label = ctk.CTkLabel(follow_vol_frame, text=f"{int(self.follow_volume_var.get())}%", font=("Consolas", 10), width=40)
+        self.follow_vol_label.pack(side="right")
 
         self._add_panel_divider(parent)
 
@@ -947,12 +1115,17 @@ class TwitchBotApp:
         self.panel_participant_list.pack(fill="x", pady=(0, 8))
         self._refresh_panel_participants()
 
-        # ボタン
+        # ボタン行1
         btn_frame = ctk.CTkFrame(parent, fg_color="transparent")
         btn_frame.pack(fill="x", pady=(8, 0))
         ctk.CTkButton(btn_frame, text="📢 リスト送信", command=self.send_participant_list_to_chat, fg_color=ACCENT).pack(side="left", fill="x", expand=True, padx=(0, 4))
         ctk.CTkButton(btn_frame, text="🔄 更新", command=self._refresh_panel_participants, width=60).pack(side="left", padx=4)
         ctk.CTkButton(btn_frame, text="🗑️", command=self.clear_participants, width=40, fg_color="#EF4444", hover_color="#DC2626").pack(side="right")
+
+        # 自動送信トグル
+        auto_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        auto_frame.pack(fill="x", pady=(8, 0))
+        ctk.CTkSwitch(auto_frame, text="⏰ 自動送信(1分)", variable=self.auto_send_var, command=self.toggle_auto_send, font=("Segoe UI", 11)).pack(side="left")
 
     def _build_resources_panel(self, parent):
         """リソースパネルのコンテンツ"""
@@ -984,6 +1157,12 @@ class TwitchBotApp:
 
         # API使用状況
         self._add_panel_section(parent, "API使用状況")
+
+        # DeepL使用状況
+        self.res_deepl_label = ctk.CTkLabel(parent, text="DeepL: 取得中...", font=("Consolas", 11))
+        self.res_deepl_label.pack(anchor="w", pady=2)
+
+        # Gladia使用状況
         usage_sec = self.config.get("gladia_usage_seconds", 0)
         usage_h = usage_sec / 3600
         self.res_gladia_label = ctk.CTkLabel(parent, text=f"Gladia: {usage_h:.2f}h / 10h", font=("Consolas", 11))
@@ -999,6 +1178,7 @@ class TwitchBotApp:
 
     def _update_resources_panel(self):
         """リソースパネルの表示を更新"""
+        # システムリソース更新
         try:
             import psutil
             process = psutil.Process()
@@ -1015,13 +1195,45 @@ class TwitchBotApp:
         except Exception as e:
             logger.debug(f"Resource panel update failed: {e}")
 
+        # DeepL使用量更新（別スレッドで実行してUIブロック回避）
+        def update_deepl():
+            try:
+                deepl_key = self.deepl_key.get().strip()
+                usage = translator.get_deepl_usage(deepl_key)
+                if usage['error']:
+                    text = f"DeepL: {usage['error']}"
+                else:
+                    used = usage['character_count']
+                    limit = usage['character_limit']
+                    # 見やすい単位に変換（万文字）
+                    used_display = f"{used:,}"
+                    limit_display = f"{limit:,}"
+                    percent = (used / limit * 100) if limit > 0 else 0
+                    text = f"DeepL: {used_display} / {limit_display} 文字 ({percent:.1f}%)"
+                # UIスレッドで更新
+                if hasattr(self, 'res_deepl_label'):
+                    self.master.after(0, lambda: self.res_deepl_label.configure(text=text))
+            except Exception as e:
+                logger.debug(f"DeepL usage update failed: {e}")
+
+        threading.Thread(target=update_deepl, daemon=True).start()
+
+        # Gladia使用量更新
+        try:
+            usage_sec = self.config.get("gladia_usage_seconds", 0)
+            usage_h = usage_sec / 3600
+            if hasattr(self, 'res_gladia_label'):
+                self.res_gladia_label.configure(text=f"Gladia: {usage_h:.2f}h / 10h")
+        except Exception as e:
+            logger.debug(f"Gladia usage update failed: {e}")
+
     # 辞書パネル用ヘルパー
     def _add_tts_dict_entry(self):
         word = self.dict_word_entry.get().strip()
         reading = self.dict_reading_entry.get().strip()
         if word and reading:
             tts_dict = get_dictionary()
-            tts_dict.add(word, reading)
+            tts_dict.add_word(word, reading)
             self.dict_word_entry.delete(0, "end")
             self.dict_reading_entry.delete(0, "end")
             self._refresh_dict_list()
@@ -1032,7 +1244,7 @@ class TwitchBotApp:
         for w in self.dict_list_frame.winfo_children():
             w.destroy()
         tts_dict = get_dictionary()
-        for word, reading in list(tts_dict.get_all().items())[:15]:
+        for word, reading in tts_dict.get_all_entries()[:15]:
             row = ctk.CTkFrame(self.dict_list_frame, fg_color="transparent")
             row.pack(fill="x", pady=1)
             ctk.CTkLabel(row, text=f"{word} → {reading}", font=("Segoe UI", 10)).pack(side="left")
@@ -1040,7 +1252,7 @@ class TwitchBotApp:
 
     def _remove_dict_entry(self, word):
         tts_dict = get_dictionary()
-        tts_dict.remove(word)
+        tts_dict.remove_word(word)
         self._refresh_dict_list()
 
     def _add_filter_word(self):
@@ -1139,10 +1351,13 @@ class TwitchBotApp:
         for w in self.panel_participant_list.winfo_children():
             w.destroy()
         participants = self.tracker.get_participants()
+        if not participants:
+            ctk.CTkLabel(self.panel_participant_list, text="参加者なし", text_color=TEXT_SUBTLE, font=("Segoe UI", 10)).pack(pady=4)
+            return
         for p in participants[:20]:
             row = ctk.CTkFrame(self.panel_participant_list, fg_color="transparent")
             row.pack(fill="x", pady=1)
-            ctk.CTkLabel(row, text=p.get("name", ""), font=("Segoe UI", 10)).pack(side="left")
+            ctk.CTkLabel(row, text=p.get("username", ""), font=("Segoe UI", 10)).pack(side="left")
 
     # ========================================
     # 旧タブビルダー（互換性のため残す - 未使用）
@@ -1171,10 +1386,14 @@ class TwitchBotApp:
         action_bar.grid(row=0, column=2, rowspan=2, sticky="e", padx=16, pady=10)
         action_bar.grid_columnconfigure(0, weight=1)
         button_opts = {"font": ("Segoe UI Semibold", 13), "height": 40, "width": 160, "corner_radius": BUTTON_CORNER_RADIUS}
-        ctk.CTkButton(action_bar, text="① トークン認証", command=self.start_auth, fg_color=ACCENT_SECONDARY, hover_color="#1EA4D8", text_color="#0B1220", **button_opts).grid(row=0, column=0, sticky="ew", pady=3)
-        ctk.CTkButton(action_bar, text="② BOT起動", command=self.start_bot, fg_color=ACCENT, hover_color="#16A34A", text_color="#0B1220", **button_opts).grid(row=1, column=0, sticky="ew", pady=3)
-        ctk.CTkButton(action_bar, text="③ BOT停止", command=self.stop_bot, fg_color="#EF4444", hover_color="#DC2626", text_color="#FFFFFF", **button_opts).grid(row=2, column=0, sticky="ew", pady=3)
-        ctk.CTkButton(action_bar, text="🚪 ログアウト", command=self.logout, fg_color="#6B7280", hover_color="#4B5563", text_color="#FFFFFF", **button_opts).grid(row=3, column=0, sticky="ew", pady=3)
+        self.main_auth_btn = ctk.CTkButton(action_bar, text="① トークン認証", command=self.start_auth, fg_color=ACCENT_SECONDARY, hover_color="#1EA4D8", text_color="#0B1220", **button_opts)
+        self.main_auth_btn.grid(row=0, column=0, sticky="ew", pady=3)
+        self.main_start_btn = ctk.CTkButton(action_bar, text="② BOT起動", command=self.start_bot, fg_color=ACCENT, hover_color="#16A34A", text_color="#0B1220", **button_opts)
+        self.main_start_btn.grid(row=1, column=0, sticky="ew", pady=3)
+        self.main_stop_btn = ctk.CTkButton(action_bar, text="③ BOT停止", command=self.stop_bot, fg_color="#EF4444", hover_color="#DC2626", text_color="#FFFFFF", **button_opts)
+        self.main_stop_btn.grid(row=2, column=0, sticky="ew", pady=3)
+        self.main_logout_btn = ctk.CTkButton(action_bar, text="🚪 ログアウト", command=self.logout, fg_color="#6B7280", hover_color="#4B5563", text_color="#FFFFFF", **button_opts)
+        self.main_logout_btn.grid(row=3, column=0, sticky="ew", pady=3)
 
         # ===== コントロール群 =====
         controls = ctk.CTkFrame(surface, fg_color="transparent")
@@ -1188,8 +1407,72 @@ class TwitchBotApp:
         card_connect.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         card_connect.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(card_connect, text="配信と翻訳", font=FONT_LABEL).grid(row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 8))
-        ctk.CTkLabel(card_connect, text="チャンネル名", font=FONT_SUBTITLE, text_color=TEXT_SUBTLE).grid(row=1, column=0, sticky="e", padx=12, pady=6)
-        ctk.CTkEntry(card_connect, textvariable=self.channel, placeholder_text="配信チャンネル名", height=34).grid(row=1, column=1, sticky="ew", padx=(0, 14), pady=6)
+        # チャンネル設定（認証アカウント表示 + ラジオボタン + 入力欄）
+        channel_frame = ctk.CTkFrame(card_connect, fg_color="transparent")
+        channel_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=6)
+        channel_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(channel_frame, text="配信チャンネル", font=FONT_SUBTITLE, text_color=TEXT_SUBTLE).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+
+        # 認証アカウント表示行
+        auth_row = ctk.CTkFrame(channel_frame, fg_color=PANEL_BG, corner_radius=8)
+        auth_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        auth_row.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(auth_row, text="認証:", font=FONT_BODY, text_color=TEXT_SUBTLE).grid(row=0, column=0, sticky="w", padx=(8, 4), pady=6)
+        self.auth_account_label = ctk.CTkLabel(auth_row, text="未認証", font=("Segoe UI Semibold", 12), text_color=ACCENT_WARN)
+        self.auth_account_label.grid(row=0, column=1, sticky="w", pady=6)
+
+        self.switch_account_btn = ctk.CTkButton(
+            auth_row,
+            text="認証",
+            width=60,
+            height=28,
+            font=("Segoe UI", 11),
+            fg_color=ACCENT_SECONDARY,
+            hover_color="#1EA4D8",
+            command=self._switch_account
+        )
+        self.switch_account_btn.grid(row=0, column=2, sticky="e", padx=8, pady=6)
+
+        # ラジオボタン: 認証アカウントと同じ
+        self.channel_auto_radio = ctk.CTkRadioButton(
+            channel_frame,
+            text="認証アカウントと同じ",
+            variable=self.channel_mode,
+            value="auto",
+            font=FONT_BODY,
+            command=self._on_channel_mode_change
+        )
+        self.channel_auto_radio.grid(row=2, column=0, sticky="w", pady=2)
+
+        # ラジオボタン: 別のチャンネル
+        self.channel_manual_radio = ctk.CTkRadioButton(
+            channel_frame,
+            text="別のチャンネルを指定",
+            variable=self.channel_mode,
+            value="manual",
+            font=FONT_BODY,
+            command=self._on_channel_mode_change
+        )
+        self.channel_manual_radio.grid(row=3, column=0, sticky="w", pady=2)
+
+        # チャンネル入力欄
+        self.channel_entry = ctk.CTkEntry(
+            channel_frame,
+            textvariable=self.channel,
+            placeholder_text="配信チャンネル名（小文字）",
+            height=32
+        )
+        self.channel_entry.grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=2)
+
+        # ヘルプテキスト
+        help_text = "※ twitch.tv/○○○ の ○○○ 部分を入力"
+        ctk.CTkLabel(channel_frame, text=help_text, font=("Segoe UI", 10), text_color=TEXT_SUBTLE).grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
+        # 初期状態を設定（autoならエントリを無効化）
+        if self.channel_mode.get() == "auto":
+            self.channel_entry.configure(state="disabled")
         ctk.CTkLabel(card_connect, text="翻訳モード", font=FONT_SUBTITLE, text_color=TEXT_SUBTLE).grid(row=2, column=0, sticky="e", padx=12, pady=6)
         ctk.CTkOptionMenu(card_connect, variable=self.lang_mode, values=['自動', '英→日', '日→英'], height=34, fg_color=PANEL_BG, button_color=ACCENT_SECONDARY, button_hover_color="#1EA4D8").grid(row=2, column=1, sticky="w", padx=(0, 14), pady=6)
         # チャット翻訳有効/無効トグル
@@ -1637,31 +1920,51 @@ class TwitchBotApp:
         # ビッツ効果音
         bits_frame = ctk.CTkFrame(frm_set, fg_color="transparent")
         bits_frame.grid(row=event_row+1, column=0, columnspan=3, sticky="ew", pady=(4, 0))
-        bits_frame.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(bits_frame, text="ビッツ:", width=60, anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 5))
+        bits_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(bits_frame, text="💎 ビッツ:", width=90, anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 5))
         ctk.CTkEntry(bits_frame, textvariable=self.bits_sound_path).grid(row=0, column=1, sticky="ew", padx=(0, 5))
         ctk.CTkButton(bits_frame, text="参照", width=60, fg_color="gray",
                       command=lambda: self.select_event_sound("bits")).grid(row=0, column=2, padx=(0, 5))
         ctk.CTkButton(bits_frame, text="再生", width=60, fg_color="#2e8b57",
                       command=lambda: self.play_event_sound("bits")).grid(row=0, column=3)
 
-        # サブスク効果音
+        # サブスク効果音（自分で登録）
         sub_frame = ctk.CTkFrame(frm_set, fg_color="transparent")
         sub_frame.grid(row=event_row+2, column=0, columnspan=3, sticky="ew", pady=(4, 0))
-        sub_frame.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(sub_frame, text="サブスク:", width=60, anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 5))
+        sub_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(sub_frame, text="⭐ サブスク:", width=90, anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 5))
         ctk.CTkEntry(sub_frame, textvariable=self.sub_sound_path).grid(row=0, column=1, sticky="ew", padx=(0, 5))
         ctk.CTkButton(sub_frame, text="参照", width=60, fg_color="gray",
                       command=lambda: self.select_event_sound("subscription")).grid(row=0, column=2, padx=(0, 5))
         ctk.CTkButton(sub_frame, text="再生", width=60, fg_color="#2e8b57",
                       command=lambda: self.play_event_sound("subscription")).grid(row=0, column=3)
 
-        # 保存ボタン
-        ctk.CTkButton(frm_set, text="設定を保存", command=self.save_settings, height=40, width=220).grid(row=event_row+4, column=0, columnspan=3, pady=30, sticky="w")
+        # ギフトサブ効果音
+        gift_sub_frame = ctk.CTkFrame(frm_set, fg_color="transparent")
+        gift_sub_frame.grid(row=event_row+3, column=0, columnspan=3, sticky="ew", pady=(4, 0))
+        gift_sub_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(gift_sub_frame, text="🎁 ギフトサブ:", width=90, anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 5))
+        ctk.CTkEntry(gift_sub_frame, textvariable=self.gift_sub_sound_path).grid(row=0, column=1, sticky="ew", padx=(0, 5))
+        ctk.CTkButton(gift_sub_frame, text="参照", width=60, fg_color="gray",
+                      command=lambda: self.select_event_sound("gift_sub")).grid(row=0, column=2, padx=(0, 5))
+        ctk.CTkButton(gift_sub_frame, text="再生", width=60, fg_color="#2e8b57",
+                      command=lambda: self.play_event_sound("gift_sub")).grid(row=0, column=3)
 
-        ctk.CTkLabel(frm_set, text="※ 設定変更後は必ず「保存」を押してください。\n※ チャンネル名なども保存されます。", text_color="gray").grid(row=event_row+5, column=0, columnspan=3)
+        # フォロー効果音
+        follow_frame = ctk.CTkFrame(frm_set, fg_color="transparent")
+        follow_frame.grid(row=event_row+4, column=0, columnspan=3, sticky="ew", pady=(4, 0))
+        follow_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(follow_frame, text="💚 フォロー:", width=90, anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 5))
+        ctk.CTkEntry(follow_frame, textvariable=self.follow_sound_path).grid(row=0, column=1, sticky="ew", padx=(0, 5))
+        ctk.CTkButton(follow_frame, text="参照", width=60, fg_color="gray",
+                      command=lambda: self.select_event_sound("follow")).grid(row=0, column=2, padx=(0, 5))
+        ctk.CTkButton(follow_frame, text="再生", width=60, fg_color="#2e8b57",
+                      command=lambda: self.play_event_sound("follow")).grid(row=0, column=3)
+
+        # 保存ボタン
+        ctk.CTkButton(frm_set, text="設定を保存", command=self.save_settings, height=40, width=220).grid(row=event_row+6, column=0, columnspan=3, pady=30, sticky="w")
+
+        ctk.CTkLabel(frm_set, text="※ 設定変更後は必ず「保存」を押してください。\n※ チャンネル名なども保存されます。", text_color="gray").grid(row=event_row+7, column=0, columnspan=3)
 
     def diagnose_tts(self):
         """TTS（読み上げ）システムの診断を実行"""
@@ -1869,6 +2172,61 @@ class TwitchBotApp:
         except Exception as e:
             self.log_message(f"❌ テスト再生エラー: {e}")
 
+    def _refresh_mic_list(self):
+        """マイクデバイス一覧を取得して更新"""
+        try:
+            devices = VoiceTranslator.get_microphone_devices()
+            if not devices:
+                self.mic_selector.configure(values=["デフォルト"])
+                return
+
+            # デバイス名リストを作成
+            device_names = ["デフォルト"] + [d['name'] for d in devices]
+            self.mic_selector.configure(values=device_names)
+
+            # キャッシュに保存
+            self.mic_devices_cache = devices
+
+            # 保存されているデバイス名があれば選択
+            saved_name = self.config.get("mic_device_name", "デフォルト")
+            if saved_name in device_names:
+                self.mic_device_var.set(saved_name)
+            else:
+                self.mic_device_var.set("デフォルト")
+
+            logger.info(f"Microphone devices found: {len(devices)}")
+        except Exception as e:
+            logger.error(f"Failed to refresh mic list: {e}")
+            self.mic_selector.configure(values=["デフォルト"])
+
+    def _on_mic_selected(self, selection):
+        """マイク選択時のコールバック"""
+        if selection == "デフォルト":
+            device_index = None
+            device_name = "デフォルト"
+        else:
+            # キャッシュからデバイスインデックスを取得
+            device_index = None
+            device_name = selection
+            if hasattr(self, 'mic_devices_cache'):
+                for d in self.mic_devices_cache:
+                    if d['name'] == selection:
+                        device_index = d['index']
+                        break
+
+        # 設定を保存
+        self.config["mic_device_index"] = device_index
+        self.config["mic_device_name"] = device_name
+        save_config(self.config)
+
+        # VoiceTranslatorのデバイスインデックスを更新
+        if hasattr(self, 'voice_translator') and self.voice_translator:
+            self.voice_translator.device_index = device_index
+            # マイクを再初期化するためにNoneに設定
+            self.voice_translator.mic = None
+
+        self.log_message(f"🎤 マイクを変更: {device_name}")
+
     def browse_voicevox_path(self):
         """VOICEVOX Engineの実行ファイルを選択"""
         file_path = filedialog.askopenfilename(
@@ -1922,6 +2280,7 @@ class TwitchBotApp:
             self.voicevox_path,
             self.voicevox_auto_start,
             self.channel,
+            self.channel_mode,
             self.lang_mode,
             self.bits_sound_path,
             self.sub_sound_path,
@@ -1951,11 +2310,16 @@ class TwitchBotApp:
             self.config["voicevox_speaker_id"] = self.voicevox_speaker_id.get()
             self.config["voicevox_speaker_name"] = self.voicevox_speaker_name.get()
             self.config["channel_name"] = self.channel.get().strip()
+            self.config["channel_mode"] = self.channel_mode.get()
             self.config["translate_mode"] = self.lang_mode.get()
             self.config["bits_sound_path"] = self.bits_sound_path.get().strip()
-            self.config["subscription_sound_path"] = self.sub_sound_path.get().strip()
             self.config["bits_sound_volume"] = int(self.bits_volume_var.get())
+            self.config["subscription_sound_path"] = self.sub_sound_path.get().strip()
             self.config["subscription_sound_volume"] = int(self.sub_volume_var.get())
+            self.config["gift_sub_sound_path"] = self.gift_sub_sound_path.get().strip()
+            self.config["gift_sub_sound_volume"] = int(self.gift_sub_volume_var.get())
+            self.config["follow_sound_path"] = self.follow_sound_path.get().strip()
+            self.config["follow_sound_volume"] = int(self.follow_volume_var.get())
             self.config["comment_log_bg"] = self.comment_bg.get().strip()
             self.config["comment_log_fg"] = self.comment_fg.get().strip()
             self.config["comment_log_font"] = self.comment_font.get().strip()
@@ -2064,10 +2428,20 @@ class TwitchBotApp:
 
     def _apply_log_style(self, textbox):
         try:
+            # フォント文字列をタプルに変換（例: "Consolas 11" -> ("Consolas", 11)）
+            font_str = self.comment_font.get()
+            font_tuple = ("Consolas", 11)  # デフォルト
+            if font_str:
+                parts = font_str.rsplit(" ", 1)
+                if len(parts) == 2:
+                    try:
+                        font_tuple = (parts[0], int(parts[1]))
+                    except ValueError:
+                        pass
             textbox.configure(
                 fg_color=self.comment_bg.get(),
                 text_color=self.comment_fg.get(),
-                font=self.comment_font.get()
+                font=font_tuple
             )
         except Exception as e:
             logger.debug(f"Failed to apply log style: {e}")
@@ -2571,13 +2945,19 @@ window.onload = function() {{
         self.qt_html_window = HtmlViewerWindow(path, self)
         self.qt_html_window.show()
 
-        # Qt のイベントループを別スレッドで処理
+        # Qt のイベントループを処理（安全なラッパー）
         def process_qt_events():
             """Qtのイベントを定期的に処理"""
-            if self.qt_app and self.qt_html_window:
-                self.qt_app.processEvents()
-                # 100msごとに再度呼び出す
-                self.master.after(100, process_qt_events)
+            try:
+                if self.qt_app and self.qt_html_window and self.qt_html_window.isVisible():
+                    self.qt_app.processEvents()
+                    # 100msごとに再度呼び出す
+                    self.master.after(100, process_qt_events)
+            except RuntimeError:
+                # Qt object has been deleted
+                logger.debug("Qt window closed, stopping event processing")
+            except Exception as e:
+                logger.warning(f"Qt event processing error: {e}")
 
         # イベント処理を開始
         self.master.after(100, process_qt_events)
@@ -2892,7 +3272,7 @@ window.onload = function() {{
 
         Args:
             message: イベントメッセージ
-            event_type: イベントタイプ ("superchat", "subscription", "badge", "bits", "other")
+            event_type: イベントタイプ ("superchat", "subscription", "gift_sub", "follow", "badge", "bits", "other")
         """
         timestamp = datetime.now().strftime("%H:%M:%S")
 
@@ -2900,6 +3280,8 @@ window.onload = function() {{
         icons = {
             "superchat": "💰",
             "subscription": "⭐",
+            "gift_sub": "🎁",
+            "follow": "💚",
             "badge": "🎖️",
             "bits": "💎",
             "other": "📢"
@@ -2917,7 +3299,7 @@ window.onload = function() {{
         self.log_message(f"[特別イベント] {message}", log_type="event")
 
         # 効果音（TTSの前に再生）
-        if event_type in ("bits", "subscription"):
+        if event_type in ("bits", "subscription", "gift_sub", "follow"):
             self.play_event_sound(event_type)
 
         # 特別イベントの読み上げ（常にON）
@@ -2927,6 +3309,8 @@ window.onload = function() {{
                 tts_messages = {
                     "superchat": f"スーパーチャット、{message}",
                     "subscription": f"サブスクリプション、{message}",
+                    "gift_sub": f"ギフトサブ、{message}",
+                    "follow": f"フォロー、{message}",
                     "bits": f"ビッツ、{message}",
                     "badge": f"バッジ獲得、{message}",
                     "other": f"イベント、{message}"
@@ -2953,6 +3337,10 @@ window.onload = function() {{
             self.bits_sound_path.set(file_path)
         elif event_type == "subscription":
             self.sub_sound_path.set(file_path)
+        elif event_type == "gift_sub":
+            self.gift_sub_sound_path.set(file_path)
+        elif event_type == "follow":
+            self.follow_sound_path.set(file_path)
 
     def play_event_sound(self, event_type: str):
         """設定された効果音を再生（存在チェック込み）"""
@@ -2960,11 +3348,20 @@ window.onload = function() {{
             logger.warning("pygameが利用できないため効果音を再生できません")
             return
 
-        path = ""
-        if event_type == "bits":
-            path = self.bits_sound_path.get().strip()
-        elif event_type == "subscription":
-            path = self.sub_sound_path.get().strip()
+        # イベントタイプに応じてパスと音量を取得
+        sound_config = {
+            "bits": (self.bits_sound_path, self.bits_volume_var),
+            "subscription": (self.sub_sound_path, self.sub_volume_var),
+            "gift_sub": (self.gift_sub_sound_path, self.gift_sub_volume_var),
+            "follow": (self.follow_sound_path, self.follow_volume_var),
+        }
+
+        if event_type not in sound_config:
+            logger.debug(f"未知のイベントタイプ: {event_type}")
+            return
+
+        path_var, volume_var = sound_config[event_type]
+        path = path_var.get().strip()
 
         if not path:
             logger.debug(f"効果音未設定のためスキップ ({event_type})")
@@ -2978,16 +3375,25 @@ window.onload = function() {{
             if not pygame.mixer.get_init():
                 pygame.mixer.init()
             sound = pygame.mixer.Sound(path)
-            # 音量を設定 (0.0〜1.0)
-            if event_type == "bits":
-                volume = self.bits_volume_var.get() / 100.0
-            else:
-                volume = self.sub_volume_var.get() / 100.0
+            volume = volume_var.get() / 100.0
             sound.set_volume(volume)
             sound.play()
             logger.debug(f"Played event SFX ({event_type}): {path} at volume {volume:.2f}")
         except Exception as e:
             logger.error(f"効果音の再生に失敗しました ({event_type}): {e}", exc_info=True)
+
+    def simulate_event(self, event_type: str):
+        """イベントをシミュレートして全体の流れをテスト（効果音+TTS）"""
+        test_messages = {
+            "bits": "テストユーザー が 100 ビッツを投げました「テストメッセージ」",
+            "subscription": "テストユーザー がサブスク登録しました（Tier 1、1ヶ月）",
+            "gift_sub": "テストユーザー が 匿名さん にギフトサブを贈りました",
+            "follow": "テストユーザー さんがフォローしました",
+        }
+
+        message = test_messages.get(event_type, f"テストイベント ({event_type})")
+        self.log_message(f"🧪 イベントシミュレーション: {event_type}", log_type="system")
+        self.log_special_event(message, event_type=event_type)
 
     def start_participant_auto_refresh(self):
         """参加者リストの自動更新を開始（3秒ごと）"""
@@ -3126,6 +3532,24 @@ window.onload = function() {{
         if not client_id:
             messagebox.showerror("エラー", "Client ID が設定されていません。\n「設定」タブで入力してください。")
             return
+
+        # 既に有効なトークンがある場合はスキップ
+        if self.token and validate_token(self.token):
+            self.log_message("✅ 既に有効なトークンがあります。再認証は不要です。")
+            self._set_status("認証済み。BOTを起動できます。", "success")
+            self._update_auth_button_states(authenticated=True)
+            return
+
+        # 保存されたトークンをチェック
+        saved_token = self.config.get("twitch_access_token", "").strip()
+        if saved_token and validate_token(saved_token):
+            self.token = saved_token
+            self.log_message("✅ 保存されたトークンが有効です。再認証は不要です。")
+            self._set_status("認証済み。BOTを起動できます。", "success")
+            self._update_auth_button_states(authenticated=True)
+            return
+
+        # 有効なトークンがない場合のみブラウザ認証を開始
         self._set_status("トークン認証を開始します。ブラウザを開いてください。", "info")
         threading.Thread(target=self.run_auth_flow, args=(client_id,), daemon=True).start()
 
@@ -3135,21 +3559,34 @@ window.onload = function() {{
 
         if not saved_token:
             logger.info("No saved token found.")
+            self._update_auth_button_states(authenticated=False)
             return
 
         logger.info("Checking saved token...")
         self.log_message("🔍 保存されたトークンをチェックしています...")
 
-        # トークンの有効性をチェック
-        if validate_token(saved_token):
+        # トークンの有効性をチェック（ユーザー情報も取得）
+        user_info = validate_token_with_info(saved_token)
+        if user_info:
             self.token = saved_token
-            self.log_message("✅ 保存されたトークンが有効です。自動ログインしました。")
+            username = user_info.get('login', '')
+            if username:
+                self.auth_username.set(username)
+                # autoモードならチャンネル名も設定
+                if self.channel_mode.get() == "auto":
+                    self.channel.set(username)
+                self.log_message(f"✅ 保存されたトークンが有効です。ユーザー: {username}")
+            else:
+                self.log_message("✅ 保存されたトークンが有効です。自動ログインしました。")
             self._set_status("保存されたトークンで自動ログイン完了", "success")
+            self._update_auth_button_states(authenticated=True)
         else:
             logger.warning("Saved token is invalid.")
             self.log_message("⚠ 保存されたトークンが無効です。再認証が必要です。")
             # 無効なトークンを削除
             self.config["twitch_access_token"] = ""
+            self.auth_username.set("")
+            self._update_auth_button_states(authenticated=False)
             save_config(self.config)
 
     def run_auth_flow(self, client_id):
@@ -3190,15 +3627,111 @@ window.onload = function() {{
 
         if self.token:
             self.log_message("✅ トークンを取得しました")
+
+            # トークンからユーザー情報を取得
+            user_info = validate_token_with_info(self.token)
+            if user_info:
+                username = user_info.get('login', '')
+                if username:
+                    self.auth_username.set(username)
+                    # autoモードならチャンネル名も設定
+                    if self.channel_mode.get() == "auto":
+                        self.channel.set(username)
+                    self.log_message(f"👤 認証ユーザー: {username}")
+
             self._set_status("トークン取得済み。BOTを起動できます。", "success")
 
             # トークンをconfig.jsonに保存（次回起動時の自動ログイン用）
             self.config["twitch_access_token"] = self.token
             save_config(self.config)
             self.log_message("💾 トークンを保存しました。次回から自動ログインします。")
+            self._update_auth_button_states(authenticated=True)
         else:
             self.log_message("⚠ トークンの取得に失敗しました。")
             self._set_status("トークンの取得に失敗しました。再試行してください。", "error")
+            self.auth_username.set("")
+            self._update_auth_button_states(authenticated=False)
+
+    def _update_auth_button_states(self, authenticated: bool):
+        """認証状態に基づいてボタンの有効/無効を更新"""
+        def update_ui():
+            # 認証ボタン: 認証済みなら無効化
+            auth_state = "disabled" if authenticated else "normal"
+            # BOT関連ボタン: 認証済みなら有効化
+            bot_state = "normal" if authenticated else "disabled"
+
+            # ヘッダーのボタン
+            if hasattr(self, 'auth_btn'):
+                self.auth_btn.configure(state=auth_state)
+                if authenticated:
+                    self.auth_btn.configure(fg_color="#4B5563", text="✓ 認証済み")
+                else:
+                    self.auth_btn.configure(fg_color="#0891B2", text="① Twitch認証")
+
+            if hasattr(self, 'start_stop_btn'):
+                self.start_stop_btn.configure(state=bot_state)
+
+            if hasattr(self, 'disconnect_btn'):
+                self.disconnect_btn.configure(state=bot_state)
+
+            # メイン画面のボタン
+            if hasattr(self, 'main_auth_btn'):
+                self.main_auth_btn.configure(state=auth_state)
+                if authenticated:
+                    self.main_auth_btn.configure(fg_color="#4B5563", text="✓ 認証済み")
+                else:
+                    self.main_auth_btn.configure(fg_color=ACCENT_SECONDARY, text="① トークン認証")
+
+            if hasattr(self, 'main_start_btn'):
+                self.main_start_btn.configure(state=bot_state)
+
+            if hasattr(self, 'main_stop_btn'):
+                self.main_stop_btn.configure(state=bot_state)
+
+            if hasattr(self, 'main_logout_btn'):
+                self.main_logout_btn.configure(state=bot_state)
+
+            # チャンネル設定エリアの認証アカウント表示
+            if hasattr(self, 'auth_account_label'):
+                username = self.auth_username.get()
+                if authenticated and username:
+                    self.auth_account_label.configure(text=username, text_color=ACCENT)
+                else:
+                    self.auth_account_label.configure(text="未認証", text_color=ACCENT_WARN)
+
+            if hasattr(self, 'switch_account_btn'):
+                if authenticated:
+                    self.switch_account_btn.configure(text="切替", fg_color="#6B7280")
+                else:
+                    self.switch_account_btn.configure(text="認証", fg_color=ACCENT_SECONDARY)
+
+        # UIスレッドで実行
+        self.master.after(0, update_ui)
+
+    def _switch_account(self):
+        """アカウント切替（ログアウト→再認証）"""
+        # BOTが動作中の場合は警告
+        if self.bot_instance:
+            result = messagebox.askyesno(
+                "確認",
+                "BOTが動作中です。停止してアカウントを切り替えますか？"
+            )
+            if not result:
+                return
+            self.stop_bot()
+
+        # 現在のトークンをクリア
+        self.token = None
+        self.auth_username.set("")
+        self.config["twitch_access_token"] = ""
+        save_config(self.config)
+
+        # UI更新
+        self._update_auth_button_states(authenticated=False)
+        self.log_message("🔄 アカウントを切り替えます...")
+
+        # 認証フロー開始
+        self.start_auth()
 
     def disconnect_all(self):
         """全ての接続を切断（BOT、TTS、音声認識）"""
@@ -3252,19 +3785,62 @@ window.onload = function() {{
         self.config["twitch_access_token"] = ""
         save_config(self.config)
 
+        # ボタン状態を更新
+        self._update_auth_button_states(authenticated=False)
+
         self.log_message("🚪 ログアウトしました。")
         self._set_status("ログアウト完了。再度認証が必要です。", "info")
         messagebox.showinfo("ログアウト", "ログアウトしました。\n再度ログインするには「🔑 認証」を実行してください。")
+
+    def _run_bot_in_thread(self, token, channel, lang_mode_getter, gui_ref, deepl_key, tts_enabled_getter, tts_include_name_getter, client_id):
+        """BOTを新しいイベントループで実行（スレッド内で呼び出し）
+
+        重要: TranslateBotはこのスレッド内で作成する必要がある。
+        メインスレッドで作成するとイベントループの不整合が発生し、
+        再起動後にコメントを受信できなくなる。
+        """
+        import asyncio
+        try:
+            # 新しいイベントループを作成してこのスレッドに設定
+            # Twitchioが内部でasyncio.get_event_loop()を呼ぶ際にこのループを使用する
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            # BOTインスタンスをこのスレッド内で作成（イベントループ設定後）
+            bot = TranslateBot(
+                token,
+                channel,
+                lang_mode_getter,
+                gui_ref,
+                deepl_key,
+                tts_enabled_getter=tts_enabled_getter,
+                tts_include_name_getter=tts_include_name_getter,
+                client_id=client_id
+            )
+            # GUIからアクセスできるよう参照を保存
+            self.bot_instance = bot
+
+            bot.run()
+        except Exception as e:
+            logger.error(f"Bot thread error: {e}", exc_info=True)
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
 
     def start_bot(self):
         # 既存のBOTがあれば停止（多重起動防止）
         if self.bot_instance:
             self.stop_bot()
+            # 少し待機して古いBOTが停止するのを待つ
+            import time
+            time.sleep(0.5)
 
         if not self.token:
             messagebox.showerror("エラー", "まずは「① トークン認証」を行ってください")
             return
-        
+
         channel = self.channel.get().strip()
         if not channel:
             messagebox.showerror("エラー", "チャンネル名を設定してください")
@@ -3274,18 +3850,24 @@ window.onload = function() {{
         if not deepl_key:
             messagebox.showwarning("警告", "DeepL API Keyが設定されていません。\n翻訳機能は動作しませんが、BOTは起動します。")
 
-        self.bot_instance = TranslateBot(
+        # 読み上げエンジンを先に起動しておく
+        self._ensure_tts_started()
+
+        # BOT起動パラメータを準備（BOTインスタンスはスレッド内で作成）
+        client_id = self.client_id.get().strip()
+        bot_params = (
             self.token,
             channel,
             lambda: self.lang_mode.get(),
             self,
             deepl_key,
-            tts_enabled_getter=lambda: True,
-            tts_include_name_getter=lambda: self.tts_include_name_var.get()
+            lambda: True,  # tts_enabled_getter
+            lambda: self.tts_include_name_var.get(),  # tts_include_name_getter
+            client_id  # フォロー検知用
         )
-        # 読み上げエンジンを先に起動しておく
-        self._ensure_tts_started()
-        threading.Thread(target=self.bot_instance.run, daemon=True).start()
+
+        # 新しいイベントループでBOTを実行（スレッド内でBOTインスタンス作成）
+        threading.Thread(target=self._run_bot_in_thread, args=bot_params, daemon=True).start()
         self.log_message(f"🤖 BOTを起動しました (Channel: {channel})")
         self._set_status(f"BOT稼働中: {channel}", "success")
         # ヘッダーUI更新
@@ -3294,7 +3876,13 @@ window.onload = function() {{
 
     def stop_bot(self):
         if self.bot_instance:
-            self.bot_instance.stop()
+            try:
+                self.bot_instance.stop()
+            except Exception as e:
+                logger.error(f"BOT停止エラー: {e}")
+            finally:
+                # BOTインスタンスをクリア
+                self.bot_instance = None
             self.log_message("⛔ BOTを停止しました")
             self._set_status("BOTを停止しました。認証済みです。", "warn")
 
@@ -4706,5 +5294,5 @@ window.onload = function() {{
 
         # 音声翻訳結果をチャット送信（音声翻訳機能がONなら送信）
         if self.voice_var.get() and translated and translated != "(No API Key)":
-            if not self._send_text_to_chat(translated):
+            if not self._send_text_to_chat(f"[Voice] {translated}"):
                 logger.warning("Voice translation could not be sent to chat (connection not ready?)")
