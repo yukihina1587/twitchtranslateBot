@@ -28,7 +28,7 @@ from src.bot import TranslateBot
 from src.config import load_config, save_config, validate_deepl_api_key, validate_twitch_client_id
 from src.voice_listener import VoiceTranslator
 from src.overlay_server import update_translation, run_server_thread
-from src.logger import logger
+from src.logger import logger, set_log_level
 from src.tts import get_tts_instance
 from src.tts_dictionary import get_dictionary
 from src.participant_tracker import get_tracker
@@ -333,6 +333,23 @@ class KototsunaApp:
         # ユーザーに通知
         self.log_message(f"✨ テーマを '{THEMES[theme_key]['name']}' に変更しました")
         self.log_message("⚠️ 一部の色変更を反映するには、アプリを再起動してください")
+
+    def _on_log_level_changed(self, level: str):
+        """
+        ログレベル選択が変更されたときのコールバック
+
+        Args:
+            level: ログレベル (DEBUG, INFO, WARNING, ERROR)
+        """
+        # ログレベルを動的に変更
+        set_log_level(level)
+
+        # 設定を保存
+        self.config["log_level"] = level.upper()
+        save_config(self.config)
+
+        # ユーザーに通知
+        self.log_message(f"📝 ログレベルを '{level}' に変更しました")
 
     def build_widgets(self):
         """新レイアウト: ヘッダー + 左サイドバー + メインコンテンツ + 折りたたみ右パネル"""
@@ -915,6 +932,13 @@ class KototsunaApp:
         display_map = {"default": theme_names[0], "gradient": theme_names[1], "minimal": theme_names[2], "cyberpunk": theme_names[3]}
         self.ui_theme_var = tk.StringVar(value=display_map.get(current_key, theme_names[0]))
         ctk.CTkOptionMenu(parent, values=theme_names, variable=self.ui_theme_var, command=self._on_theme_changed, width=280).pack(fill="x", pady=(0, 8))
+
+        # ログレベル
+        self._add_panel_section(parent, "ログレベル")
+        log_levels = ["DEBUG", "INFO", "WARNING", "ERROR"]
+        current_log_level = self.config.get("log_level", "INFO").upper()
+        self.log_level_var = tk.StringVar(value=current_log_level)
+        ctk.CTkOptionMenu(parent, values=log_levels, variable=self.log_level_var, command=self._on_log_level_changed, width=280).pack(fill="x", pady=(0, 8))
 
         self._add_panel_divider(parent)
 

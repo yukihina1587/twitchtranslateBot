@@ -44,11 +44,14 @@ DEFAULT_CONFIG = {
     "chat_html_newest_first": False,  # True: 上が新しい, False: 下が新しい
     # UI テーマ
     "ui_theme": "default",  # default / gradient / minimal / cyberpunk
+    # ログ設定
+    "log_level": "INFO",  # DEBUG / INFO / WARNING / ERROR
 }
 
 VALID_TRANSLATE_MODES = {"自動", "英→日", "日→英"}
 VALID_UI_THEMES = {"default", "gradient", "minimal", "cyberpunk"}
 VALID_CHANNEL_MODES = {"auto", "manual"}
+VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
 
 def validate_config(config_data):
     """
@@ -76,6 +79,15 @@ def validate_config(config_data):
         logger.warning(f"channel_mode is invalid: {validated.get('channel_mode')}, fallback to manual")
         validated["channel_mode"] = "manual"
         changed = True
+
+    # log_level
+    log_level = validated.get("log_level", "INFO").upper()
+    if log_level not in VALID_LOG_LEVELS:
+        logger.warning(f"log_level is invalid: {log_level}, fallback to INFO")
+        validated["log_level"] = "INFO"
+        changed = True
+    else:
+        validated["log_level"] = log_level
 
     # ブール値はbool化
     for key in ["voicevox_auto_start"]:
