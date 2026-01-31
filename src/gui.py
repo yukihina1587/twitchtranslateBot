@@ -2230,6 +2230,7 @@ class KototsunaApp:
     def browse_voicevox_path(self):
         """VOICEVOX Engineの実行ファイルを選択"""
         file_path = filedialog.askopenfilename(
+            parent=self.master,
             title="VOICEVOX Engineの実行ファイルを選択（run.exe）",
             filetypes=[
                 ("実行ファイル", "*.exe" if platform.system() == "Windows" else "*"),
@@ -3344,6 +3345,7 @@ window.onload = function() {{
     def select_event_sound(self, event_type: str):
         """効果音ファイルを選択"""
         file_path = filedialog.askopenfilename(
+            parent=self.master,
             title="効果音ファイルを選択",
             filetypes=[
                 ("Audio files", "*.mp3 *.wav *.ogg"),
@@ -3468,6 +3470,7 @@ window.onload = function() {{
 
         # ファイル保存ダイアログ
         file_path = filedialog.asksaveasfilename(
+            parent=self.master,
             defaultextension=".txt",
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
             initialfile=f"chatlog_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -3503,6 +3506,7 @@ window.onload = function() {{
 
         # ファイル保存ダイアログ
         file_path = filedialog.asksaveasfilename(
+            parent=self.master,
             defaultextension=".json",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
             initialfile=f"chatlog_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
