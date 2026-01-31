@@ -1,0 +1,37 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio
+          # Install project dependencies (excluding GUI-specific ones for CI)
+          pip install twitchio requests aiohttp python-dotenv websockets tenacity psutil
+
+      - name: Run tests
+        run: |
+          pytest tests/ -v --ignore=tests/test_tts.py --ignore=tests/test_bot.py
+        env:
+          PYTHONPATH: ${{ github.workspace }}
