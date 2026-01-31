@@ -9,6 +9,7 @@ import asyncio
 import json
 import base64
 import requests
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Gladia関連のインポート（websocketsが利用可能かチェック）
 try:
@@ -221,6 +222,19 @@ class VoiceTranslator:
                 update_gladia_usage(self.config_data, int(elapsed))
                 self.audio_start_time = None
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(requests.exceptions.RequestException),
+        reraise=True
+    )
+    def _init_gladia_session(self, url, headers, config):
+        """Gladiaセッションを初期化（リトライ付き）"""
+        logger.info("Gladia: Sending session initialization request...")
+        response = requests.post(url, headers=headers, json=config, timeout=10)
+        response.raise_for_status()
+        return response.json()
+
     async def _gladia_websocket_stream(self, audio_stream, language):
         """Gladia WebSocketストリーミング（非同期）"""
         try:
@@ -250,10 +264,7 @@ class VoiceTranslator:
                 }
             }
 
-            response = requests.post(init_url, headers=headers, json=config, timeout=10)
-            response.raise_for_status()
-
-            session_data = response.json()
+            session_data = self._init_gladia_session(init_url, headers, config)
             ws_url = session_data.get("url")
             session_id = session_data.get("id")
 

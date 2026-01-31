@@ -6,7 +6,13 @@ import asyncio
 import threading
 import re
 from collections import OrderedDict
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from src.logger import logger
+
+
+class DeepLRetryableError(Exception):
+    """DeepL APIのリトライ可能なエラー（429, 503など）"""
+    pass
 
 DEEPL_FREE_ENDPOINT = "https://api-free.deepl.com/v2/translate"
 DEEPL_PRO_ENDPOINT = "https://api.deepl.com/v2/translate"
@@ -258,17 +264,37 @@ def _build_payload(text, mode):
     return data
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError, DeepLRetryableError)),
+    reraise=True
+)
 async def _translate_http_async(payload, endpoint, api_key):
+    """DeepL API呼び出し（指数バックオフリトライ付き）"""
     headers = {"Authorization": f"DeepL-Auth-Key {api_key}"}
     async with aiohttp.ClientSession() as session:
-        async with session.post(endpoint, data=payload, headers=headers) as resp:
+        async with session.post(endpoint, data=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            if resp.status in (429, 503):
+                logger.warning(f"DeepL rate limited ({resp.status}). Will retry with exponential backoff...")
+                raise DeepLRetryableError(f"Rate limited: {resp.status}")
             body = await resp.text()
             return resp.status, body, await resp.json() if resp.status == 200 else None
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type((requests.exceptions.RequestException, DeepLRetryableError)),
+    reraise=True
+)
 def _translate_http_sync(payload, endpoint, api_key):
+    """DeepL API呼び出し（指数バックオフリトライ付き）"""
     headers = {"Authorization": f"DeepL-Auth-Key {api_key}"}
-    resp = requests.post(endpoint, data=payload, headers=headers)
+    resp = requests.post(endpoint, data=payload, headers=headers, timeout=30)
+    if resp.status_code in (429, 503):
+        logger.warning(f"DeepL rate limited ({resp.status_code}). Will retry with exponential backoff...")
+        raise DeepLRetryableError(f"Rate limited: {resp.status_code}")
     return resp.status_code, resp.text, resp.json() if resp.status_code == 200 else None
 
 
@@ -302,25 +328,20 @@ async def translate_text(text, mode, api_key):
     await _rate_limiter.wait_async()
     _stats["requests"] += 1
 
-    for backoff in [0] + RETRY_BACKOFF:
-        if backoff:
-            await asyncio.sleep(backoff)
-        try:
-            status, body, result = await _translate_http_async(payload, endpoint, api_key)
-            if status == 200:
-                translated = result["translations"][0]["text"]
-                _cache.set(cache_key, translated)
-                return translated
-            elif status in (429, 503):
-                logger.warning(f"DeepL rate limited ({status}). Retrying after {backoff}s...")
-                continue
-            else:
-                logger.error(f"DeepL API Error: {status} {body}")
-                break
-        except Exception as e:
-            logger.error(f"Exception during DeepL request: {e}", exc_info=True)
-            _stats["errors"] += 1
-            break
+    try:
+        status, body, result = await _translate_http_async(payload, endpoint, api_key)
+        if status == 200:
+            translated = result["translations"][0]["text"]
+            _cache.set(cache_key, translated)
+            return translated
+        else:
+            logger.error(f"DeepL API Error: {status} {body}")
+    except DeepLRetryableError:
+        logger.error("DeepL API retry exhausted")
+        _stats["errors"] += 1
+    except Exception as e:
+        logger.error(f"Exception during DeepL request: {e}", exc_info=True)
+        _stats["errors"] += 1
 
     return text
 
@@ -353,24 +374,19 @@ def translate_text_sync(text, mode, api_key):
     _rate_limiter.wait_sync()
     _stats["requests"] += 1
 
-    for backoff in [0] + RETRY_BACKOFF:
-        if backoff:
-            time.sleep(backoff)
-        try:
-            status, body, result = _translate_http_sync(payload, endpoint, api_key)
-            if status == 200:
-                translated = result["translations"][0]["text"]
-                _cache.set(cache_key, translated)
-                return translated
-            elif status in (429, 503):
-                logger.warning(f"DeepL rate limited ({status}). Retrying after {backoff}s...")
-                continue
-            else:
-                logger.error(f"DeepL API Error: {status} {body}")
-                break
-        except Exception as e:
-            logger.error(f"Exception during DeepL request: {e}", exc_info=True)
-            _stats["errors"] += 1
-            break
+    try:
+        status, body, result = _translate_http_sync(payload, endpoint, api_key)
+        if status == 200:
+            translated = result["translations"][0]["text"]
+            _cache.set(cache_key, translated)
+            return translated
+        else:
+            logger.error(f"DeepL API Error: {status} {body}")
+    except DeepLRetryableError:
+        logger.error("DeepL API retry exhausted")
+        _stats["errors"] += 1
+    except Exception as e:
+        logger.error(f"Exception during DeepL request: {e}", exc_info=True)
+        _stats["errors"] += 1
 
     return text
