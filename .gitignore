@@ -22,6 +22,7 @@ ngrok.exe
 .claude.json
 .mcp.json
 .claude/
+AGENTS.md
 
 # User data
 tts_dictionary.json
