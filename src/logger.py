@@ -80,5 +80,47 @@ def setup_logger(name: str = "TwitchTranslateBOT", level: str = "INFO") -> loggi
     return logger
 
 
+def set_log_level(level: str) -> None:
+    """
+    ログレベルを動的に変更する
+
+    Args:
+        level: ログレベル (DEBUG, INFO, WARNING, ERROR)
+    """
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+    }
+    log_level = level_map.get(level.upper(), logging.INFO)
+
+    # ルートロガーとすべてのハンドラのレベルを変更
+    root_logger = logging.getLogger("TwitchTranslateBOT")
+    root_logger.setLevel(log_level)
+
+    for handler in root_logger.handlers:
+        handler.setLevel(log_level)
+
+    root_logger.info(f"Log level changed to: {level.upper()}")
+
+
+def get_log_level() -> str:
+    """
+    現在のログレベルを取得する
+
+    Returns:
+        現在のログレベル文字列
+    """
+    level_names = {
+        logging.DEBUG: "DEBUG",
+        logging.INFO: "INFO",
+        logging.WARNING: "WARNING",
+        logging.ERROR: "ERROR",
+    }
+    root_logger = logging.getLogger("TwitchTranslateBOT")
+    return level_names.get(root_logger.level, "INFO")
+
+
 # Create default logger instance
 logger = setup_logger()
