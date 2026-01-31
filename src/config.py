@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime
 from src.logger import logger
 
@@ -208,3 +209,43 @@ def update_gladia_usage(config_data, seconds):
 
     remaining = 36000 - config_data["gladia_usage_seconds"]
     logger.info(f"Gladia usage: {config_data['gladia_usage_seconds']}s / 36000s (Remaining: {remaining}s / {remaining/3600:.1f}h)")
+
+
+def validate_deepl_api_key(key: str) -> tuple[bool, str]:
+    """
+    DeepL APIキーの形式を検証
+
+    Args:
+        key: DeepL APIキー
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if not key:
+        return False, "DeepL APIキーが入力されていません"
+    key = key.strip()
+    # DeepL Free: ends with :fx, Pro: UUID-like format
+    if key.endswith(":fx") and len(key) > 3:
+        return True, ""
+    if re.match(r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$', key.lower()):
+        return True, ""
+    return False, "DeepL APIキーの形式が正しくありません（Free版は:fxで終わる形式、Pro版はUUID形式）"
+
+
+def validate_twitch_client_id(client_id: str) -> tuple[bool, str]:
+    """
+    Twitch Client IDの形式を検証
+
+    Args:
+        client_id: Twitch Client ID
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if not client_id:
+        return False, "Twitch Client IDが入力されていません"
+    client_id = client_id.strip()
+    # Twitch Client ID: 30 alphanumeric characters
+    if re.match(r'^[a-z0-9]{30}$', client_id.lower()):
+        return True, ""
+    return False, "Twitch Client IDの形式が正しくありません（30文字の英数字）"
