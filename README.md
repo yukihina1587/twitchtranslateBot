@@ -1,5 +1,7 @@
 # Twitch翻訳BOT (DeepL版)
 
+[![Tests](https://github.com/yukihina1587/twitchtranslateBot/actions/workflows/test.yml/badge.svg)](https://github.com/yukihina1587/twitchtranslateBot/actions/workflows/test.yml)
+
 Twitchのチャットメッセージをリアルタイムで翻訳し、チャットに投稿するBOTです。DeepL APIを利用しています。
 
 ## 主な機能
@@ -8,11 +10,14 @@ Twitchのチャットメッセージをリアルタイムで翻訳し、チャ�
 -   日本語⇔英語の双方向翻訳
 -   **音声翻訳（マイク入力）**: マイクに向かって喋った内容を翻訳
 -   **チャット読み上げ（TTS）**: 日本語のチャットメッセージを音声で読み上げ（VOICEVOX利用時は冥鳴ひまりの声、フォールバック時はpyttsx3）
+-   **イベント効果音**: Bits、サブスク、ギフトサブ、フォロー時に効果音を再生（個別ボリューム調整可能）
+-   **翻訳オン/オフ切り替え**: チャット翻訳機能をリアルタイムで有効/無効化
+-   **API安定性**: ネットワークエラー時の自動リトライ（指数バックオフ）
 -   GUIによる簡単な操作
 
 ## 必要なもの
 
--   Python 3.6以上
+-   Python 3.10以上（3.12推奨）
 -   Twitchアカウント
 -   DeepL APIキー (Free版またはPro版)
 -   マイク（音声翻訳機能を使用する場合）
