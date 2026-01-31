@@ -128,7 +128,7 @@ FONT_SUBTITLE = ("Segoe UI", 13)
 FONT_LABEL = ("Segoe UI Semibold", 12)
 FONT_BODY = ("Segoe UI", 12)
 
-class TwitchBotApp:
+class KototsunaApp:
     def __init__(self, master):
         self.master = master
         self.master.title("ことつな！")

@@ -19,7 +19,7 @@ import customtkinter as ctk  # noqa: E402
 import src.overlay_server  # noqa: E402
 import src.voice_listener  # noqa: E402
 import src.translator      # noqa: E402
-from src.gui import TwitchBotApp  # noqa: E402
+from src.gui import KototsunaApp  # noqa: E402
 
 # .envの読み込み
 load_dotenv()
@@ -113,7 +113,7 @@ if __name__ == '__main__':
     def init_app():
         global app
         try:
-            app = TwitchBotApp(root)
+            app = KototsunaApp(root)
             # ウィンドウを閉じる際のプロトコルを設定
             root.protocol("WM_DELETE_WINDOW", on_closing)
             # スプラッシュスクリーンを閉じる

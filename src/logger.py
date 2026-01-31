@@ -1,5 +1,5 @@
 """
-Logging configuration for TwitchTranslateBOT
+Logging configuration for KototsunaBot
 Provides centralized logging setup with daily rotating file handler.
 """
 import logging
@@ -26,7 +26,7 @@ def _get_log_directory() -> Path:
     return base_dir / "logs"
 
 
-def setup_logger(name: str = "TwitchTranslateBOT", level: str = "INFO") -> logging.Logger:
+def setup_logger(name: str = "KototsunaBot", level: str = "INFO") -> logging.Logger:
     """
     Setup and configure logger with daily rotating file handler.
     Console output is disabled - all logs go to file only.
